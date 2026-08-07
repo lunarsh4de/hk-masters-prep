@@ -28,9 +28,9 @@
           <h1>港硕行前备忘录</h1>
           <p class="hero__subtitle">把重要的事带上，把不必要的留在原地。</p>
         </div>
-        <button class="button button--hero" id="heroAddItem" type="button">
-          <i data-lucide="plus" aria-hidden="true"></i>
-          添加事项
+        <button class="button button--hero" id="heroManageChecklist" type="button">
+          <i data-lucide="list-plus" aria-hidden="true"></i>
+          管理清单
         </button>
       </div>
       <a
@@ -116,13 +116,9 @@
             <p id="resultSummary" class="result-summary">显示全部事项</p>
           </div>
           <div class="workspace-actions">
-            <button class="button button--primary" id="addItemButton" type="button">
-              <i data-lucide="plus" aria-hidden="true"></i>
-              添加事项
-            </button>
-            <button class="button button--secondary" id="addCategoryButton" type="button">
-              <i data-lucide="folder-plus" aria-hidden="true"></i>
-              添加分类
+            <button class="button button--primary" id="manageChecklistButton" type="button">
+              <i data-lucide="list-plus" aria-hidden="true"></i>
+              管理清单
             </button>
           </div>
         </div>
@@ -148,9 +144,6 @@
             </button>
             <button class="icon-button" id="layoutButton" type="button" aria-label="切换单列或双列" title="切换单列或双列">
               <i data-lucide="columns-2" aria-hidden="true"></i>
-            </button>
-            <button class="icon-button" id="editModeButton" type="button" aria-label="切换整理模式" title="整理分类与事项">
-              <i data-lucide="settings-2" aria-hidden="true"></i>
             </button>
             <button class="icon-button" id="moreButton" type="button" aria-label="更多操作" title="更多操作" aria-expanded="false">
               <i data-lucide="ellipsis" aria-hidden="true"></i>
@@ -297,6 +290,37 @@
       </section>
     </main>
 
+    <dialog class="modal manage-dialog" id="manageDialog">
+      <div class="manage-dialog__content">
+        <div class="modal-heading">
+          <div>
+            <p class="section-kicker">CHECKLIST</p>
+            <h2>管理清单</h2>
+          </div>
+          <button class="icon-button modal-close" type="button" data-close-dialog="manageDialog" aria-label="关闭" title="关闭">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="manage-action-list">
+          <button class="manage-action" data-manage-action="add-item" type="button">
+            <span class="manage-action__icon"><i data-lucide="plus" aria-hidden="true"></i></span>
+            <span><strong>新增事项</strong><small>加入现有大类并设置备注</small></span>
+            <i data-lucide="chevron-right" aria-hidden="true"></i>
+          </button>
+          <button class="manage-action" data-manage-action="add-category" type="button">
+            <span class="manage-action__icon"><i data-lucide="folder-plus" aria-hidden="true"></i></span>
+            <span><strong>新增大类</strong><small>创建新的准备事项分组</small></span>
+            <i data-lucide="chevron-right" aria-hidden="true"></i>
+          </button>
+          <button class="manage-action" data-manage-action="organize" type="button">
+            <span class="manage-action__icon"><i data-lucide="list-tree" aria-hidden="true"></i></span>
+            <span><strong>整理与删除</strong><small>调整顺序、编辑或移除内容</small></span>
+            <i data-lucide="chevron-right" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog class="modal" id="itemDialog">
       <form method="dialog" id="itemForm">
         <div class="modal-heading">
@@ -376,6 +400,7 @@
       </form>
     </dialog>
 
+    <div class="context-menu" id="contextMenu" role="menu" hidden></div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <script src="lucide.min.js"></script>

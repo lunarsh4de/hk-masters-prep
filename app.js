@@ -152,6 +152,9 @@ const defaultState = {
 
 let state = loadState();
 let toastTimer;
+let contextTarget = null;
+let longPressTimer = null;
+let longPressStart = null;
 
 const elements = {
   categoryGrid: document.querySelector("#categoryGrid"),
@@ -169,8 +172,9 @@ const elements = {
   filterControl: document.querySelector("#filterControl"),
   densityButton: document.querySelector("#densityButton"),
   layoutButton: document.querySelector("#layoutButton"),
-  editModeButton: document.querySelector("#editModeButton"),
   editBanner: document.querySelector("#editBanner"),
+  manageDialog: document.querySelector("#manageDialog"),
+  contextMenu: document.querySelector("#contextMenu"),
   moreButton: document.querySelector("#moreButton"),
   moreMenu: document.querySelector("#moreMenu"),
   emptyState: document.querySelector("#emptyState"),
@@ -292,8 +296,6 @@ function render() {
   elements.categoryGrid.classList.toggle("layout-single", state.settings.layout === "single");
   elements.densityButton.classList.toggle("is-active", state.settings.density === "compact");
   elements.layoutButton.classList.toggle("is-active", state.settings.layout === "single");
-  elements.editModeButton.classList.toggle("is-active", state.settings.editMode);
-  elements.editModeButton.setAttribute("aria-pressed", String(state.settings.editMode));
   elements.editBanner.hidden = !state.settings.editMode;
   elements.departureDate.value = state.settings.departureDate;
   elements.personalNotes.value = state.settings.notes;
@@ -434,6 +436,7 @@ function buildCategoryPanel(category, categoryIndex, shownItems) {
       <button class="category-icon-button edit-only" data-action="move-category-down" aria-label="下移分类" title="下移分类" ${categoryIndex === state.categories.length - 1 ? "disabled" : ""}><i data-lucide="arrow-down" aria-hidden="true"></i></button>
       <button class="category-icon-button edit-only" data-action="edit-category" aria-label="编辑分类" title="编辑分类"><i data-lucide="pencil" aria-hidden="true"></i></button>
       <button class="category-icon-button edit-only" data-action="delete-category" aria-label="删除分类" title="删除分类"><i data-lucide="trash-2" aria-hidden="true"></i></button>
+      <button class="category-icon-button category-menu-button" data-action="open-category-menu" aria-label="管理大类" title="管理大类"><i data-lucide="ellipsis-vertical" aria-hidden="true"></i></button>
       <button class="category-icon-button" data-action="toggle-category" aria-label="${category.collapsed ? "展开" : "折叠"}分类" title="${category.collapsed ? "展开" : "折叠"}分类"><i data-lucide="${category.collapsed ? "chevron-down" : "chevron-up"}" aria-hidden="true"></i></button>
     </div>`;
   header.querySelector(".category-title").textContent = category.name;
@@ -494,6 +497,15 @@ function buildChecklistItem(category, entry) {
     content.appendChild(note);
   }
   row.appendChild(content);
+
+  const menuButton = document.createElement("button");
+  menuButton.className = "item-menu-button";
+  menuButton.type = "button";
+  menuButton.dataset.action = "open-item-menu";
+  menuButton.setAttribute("aria-label", `管理“${entry.text}”`);
+  menuButton.title = "管理事项";
+  menuButton.innerHTML = '<i data-lucide="ellipsis-vertical" aria-hidden="true"></i>';
+  row.appendChild(menuButton);
 
   const itemIndex = category.items.findIndex((candidate) => candidate.id === entry.id);
   const actions = document.createElement("div");
@@ -568,6 +580,88 @@ function toggleEditMode(force) {
   state.settings.editMode = typeof force === "boolean" ? force : !state.settings.editMode;
   saveState();
   render();
+}
+
+function openManageDialog() {
+  closeContextMenu();
+  elements.manageDialog.showModal();
+}
+
+function deleteCategory(category) {
+  const description = category.items.length ? `，其中包含 ${category.items.length} 个事项` : "";
+  if (!window.confirm(`删除大类“${category.name}”${description}？`)) return false;
+  state.categories = state.categories.filter((entry) => entry.id !== category.id);
+  saveState("大类已删除");
+  render();
+  return true;
+}
+
+function deleteItem(category, entry) {
+  if (!entry || !window.confirm(`删除事项“${entry.text}”？`)) return false;
+  category.items = category.items.filter((candidate) => candidate.id !== entry.id);
+  saveState("事项已删除");
+  render();
+  return true;
+}
+
+function closeContextMenu() {
+  elements.contextMenu.hidden = true;
+  elements.contextMenu.innerHTML = "";
+  contextTarget = null;
+}
+
+function contextActionsFor(target) {
+  if (target.type === "item") {
+    return [
+      { action: "edit-item", icon: "pencil", label: "编辑事项" },
+      { action: "delete-item", icon: "trash-2", label: "删除事项", danger: true },
+    ];
+  }
+  return [
+    { action: "add-item", icon: "plus", label: "在此大类新增事项" },
+    { action: "edit-category", icon: "pencil", label: "编辑大类" },
+    { action: "delete-category", icon: "trash-2", label: "删除大类", danger: true },
+  ];
+}
+
+function openContextMenu(target, options = {}) {
+  closeMoreMenu();
+  closeContextMenu();
+  contextTarget = target;
+
+  contextActionsFor(target).forEach((entry) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.role = "menuitem";
+    button.dataset.contextAction = entry.action;
+    if (entry.danger) button.classList.add("context-menu__danger");
+    button.innerHTML = `<i data-lucide="${entry.icon}" aria-hidden="true"></i><span>${entry.label}</span>`;
+    elements.contextMenu.appendChild(button);
+  });
+
+  elements.contextMenu.hidden = false;
+  refreshIcons();
+
+  const anchorRect = options.anchor?.getBoundingClientRect();
+  const preferredX = options.x ?? anchorRect?.right ?? window.innerWidth / 2;
+  const preferredY = options.y ?? anchorRect?.bottom ?? window.innerHeight / 2;
+  const menuRect = elements.contextMenu.getBoundingClientRect();
+  const left = Math.min(Math.max(10, preferredX), window.innerWidth - menuRect.width - 10);
+  const top = Math.min(Math.max(10, preferredY), window.innerHeight - menuRect.height - 10);
+  elements.contextMenu.style.left = `${left}px`;
+  elements.contextMenu.style.top = `${top}px`;
+  elements.contextMenu.querySelector("button")?.focus({ preventScroll: true });
+}
+
+function contextTargetFromElement(element) {
+  const panel = element.closest(".category-panel");
+  if (!panel) return null;
+  const row = element.closest(".checklist-item");
+  return {
+    type: row ? "item" : "category",
+    categoryId: panel.dataset.categoryId,
+    itemId: row?.dataset.itemId ?? null,
+  };
 }
 
 function showToast(message) {
@@ -727,12 +821,14 @@ elements.categoryGrid.addEventListener("click", (event) => {
 
   if (action === "toggle-category") category.collapsed = !category.collapsed;
   if (action === "add-item") return openItemDialog(category.id);
-  if (action === "edit-category") return openCategoryDialog(category);
-  if (action === "delete-category") {
-    const description = category.items.length ? `，其中包含 ${category.items.length} 个事项` : "";
-    if (!window.confirm(`删除分类“${category.name}”${description}？`)) return;
-    state.categories = state.categories.filter((entry) => entry.id !== category.id);
+  if (action === "open-category-menu") {
+    return openContextMenu({ type: "category", categoryId: category.id }, { anchor: button });
   }
+  if (action === "open-item-menu") {
+    return openContextMenu({ type: "item", categoryId: category.id, itemId }, { anchor: button });
+  }
+  if (action === "edit-category") return openCategoryDialog(category);
+  if (action === "delete-category") return deleteCategory(category);
   if (action === "move-category-up" || action === "move-category-down") {
     const index = state.categories.findIndex((entry) => entry.id === category.id);
     moveArrayItem(state.categories, index, index + (action.endsWith("up") ? -1 : 1));
@@ -743,8 +839,7 @@ elements.categoryGrid.addEventListener("click", (event) => {
   }
   if (action === "delete-item") {
     const entry = category.items[itemIndex];
-    if (!window.confirm(`删除“${entry.text}”？`)) return;
-    category.items.splice(itemIndex, 1);
+    return deleteItem(category, entry);
   }
   if (action === "move-item-up" || action === "move-item-down") {
     moveArrayItem(category.items, itemIndex, itemIndex + (action.endsWith("up") ? -1 : 1));
@@ -752,6 +847,57 @@ elements.categoryGrid.addEventListener("click", (event) => {
 
   saveState();
   render();
+});
+
+elements.categoryGrid.addEventListener("contextmenu", (event) => {
+  const target = contextTargetFromElement(event.target);
+  if (!target) return;
+  event.preventDefault();
+  openContextMenu(target, { x: event.clientX, y: event.clientY });
+});
+
+elements.categoryGrid.addEventListener("pointerdown", (event) => {
+  if (event.pointerType === "mouse" || event.target.closest("button, input, a")) return;
+  const target = contextTargetFromElement(event.target);
+  if (!target) return;
+  longPressStart = { x: event.clientX, y: event.clientY, target };
+  clearTimeout(longPressTimer);
+  longPressTimer = setTimeout(() => {
+    if (!longPressStart) return;
+    openContextMenu(longPressStart.target, { x: longPressStart.x, y: longPressStart.y });
+    longPressStart = null;
+  }, 550);
+});
+
+elements.categoryGrid.addEventListener("pointermove", (event) => {
+  if (!longPressStart) return;
+  if (Math.hypot(event.clientX - longPressStart.x, event.clientY - longPressStart.y) > 10) {
+    clearTimeout(longPressTimer);
+    longPressStart = null;
+  }
+});
+
+for (const eventName of ["pointerup", "pointercancel", "pointerleave"]) {
+  elements.categoryGrid.addEventListener(eventName, () => {
+    clearTimeout(longPressTimer);
+    longPressStart = null;
+  });
+}
+
+elements.contextMenu.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-context-action]");
+  if (!button || !contextTarget) return;
+  const target = { ...contextTarget };
+  const category = findCategory(target.categoryId);
+  const entry = target.itemId ? findItem(target.itemId)?.entry : null;
+  closeContextMenu();
+  if (!category) return;
+
+  if (button.dataset.contextAction === "add-item") openItemDialog(category.id);
+  if (button.dataset.contextAction === "edit-category") openCategoryDialog(category);
+  if (button.dataset.contextAction === "delete-category") deleteCategory(category);
+  if (button.dataset.contextAction === "edit-item" && entry) openItemDialog(category.id, entry);
+  if (button.dataset.contextAction === "delete-item" && entry) deleteItem(category, entry);
 });
 
 elements.categoryGrid.addEventListener("dragstart", (event) => {
@@ -885,9 +1031,8 @@ elements.filterControl.addEventListener("click", (event) => {
   render();
 });
 
-document.querySelector("#addItemButton").addEventListener("click", () => openItemDialog());
-document.querySelector("#heroAddItem").addEventListener("click", () => openItemDialog());
-document.querySelector("#addCategoryButton").addEventListener("click", () => openCategoryDialog());
+document.querySelector("#manageChecklistButton").addEventListener("click", openManageDialog);
+document.querySelector("#heroManageChecklist").addEventListener("click", openManageDialog);
 document.querySelector("#exitEditMode").addEventListener("click", () => toggleEditMode(false));
 document.querySelector("#clearFiltersButton").addEventListener("click", () => {
   state.settings.filter = "all";
@@ -908,7 +1053,17 @@ elements.layoutButton.addEventListener("click", () => {
   render();
 });
 
-elements.editModeButton.addEventListener("click", () => toggleEditMode());
+elements.manageDialog.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-manage-action]");
+  if (!button) return;
+  elements.manageDialog.close();
+  if (button.dataset.manageAction === "add-item") openItemDialog();
+  if (button.dataset.manageAction === "add-category") openCategoryDialog();
+  if (button.dataset.manageAction === "organize") {
+    toggleEditMode(true);
+    showToast("整理模式已开启");
+  }
+});
 
 elements.moreButton.addEventListener("click", (event) => {
   event.stopPropagation();
@@ -919,6 +1074,7 @@ elements.moreButton.addEventListener("click", (event) => {
 
 document.addEventListener("click", (event) => {
   if (!elements.moreMenu.contains(event.target) && event.target !== elements.moreButton) closeMoreMenu();
+  if (!elements.contextMenu.hidden && !elements.contextMenu.contains(event.target)) closeContextMenu();
 });
 
 document.querySelector("#copySummaryButton").addEventListener("click", () => {
@@ -988,6 +1144,7 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     openItemDialog();
   }
+  if (event.key === "Escape") closeContextMenu();
 });
 
 render();
