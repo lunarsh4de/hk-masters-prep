@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#c63d36" />
+    <link rel="icon" href="favicon.jpg" type="image/jpeg" />
+    <meta
+      name="description"
+      content="可编辑、可备份的港硕行前备忘录，适合部署到 GitHub Pages。"
+    />
+    <title>港硕行前备忘录</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#checklist">跳到清单</a>
+
+    <header class="hero">
+      <img
+        class="hero__image"
+        src="hong-kong-harbour.jpg"
+        alt="香港维多利亚港城市景观"
+      />
+      <div class="hero__shade"></div>
+      <div class="hero__content">
+        <div>
+          <p class="eyebrow">HONG KONG · MASTER'S</p>
+          <h1>港硕行前备忘录</h1>
+          <p class="hero__subtitle">把重要的事带上，把不必要的留在原地。</p>
+        </div>
+        <button class="button button--hero" id="heroAddItem" type="button">
+          <i data-lucide="plus" aria-hidden="true"></i>
+          添加事项
+        </button>
+      </div>
+      <a
+        class="photo-credit"
+        href="https://unsplash.com/photos/epaE0jEOc0Y"
+        target="_blank"
+        rel="noreferrer"
+      >
+        Photo: Luise and Nic / Unsplash
+      </a>
+    </header>
+
+    <main class="app-shell">
+      <aside class="sidebar" aria-label="行前概览">
+        <section class="progress-panel" aria-labelledby="progressTitle">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">总进度</p>
+              <h2 id="progressTitle">准备状态</h2>
+            </div>
+            <div class="progress-ring" id="progressRing" aria-label="已完成 0%">
+              <strong id="progressPercent">0%</strong>
+            </div>
+          </div>
+          <div class="stats-row">
+            <div><strong id="doneCount">0</strong><span>已完成</span></div>
+            <div><strong id="todoCount">0</strong><span>待处理</span></div>
+            <div><strong id="criticalCount">0</strong><span>关键待办</span></div>
+          </div>
+        </section>
+
+        <section class="sidebar-section" aria-labelledby="departureTitle">
+          <div class="section-heading section-heading--compact">
+            <div>
+              <p class="section-kicker">时间</p>
+              <h2 id="departureTitle">出发倒计时</h2>
+            </div>
+            <i data-lucide="calendar-days" aria-hidden="true"></i>
+          </div>
+          <label class="field-label" for="departureDate">出发日期</label>
+          <input class="text-input" id="departureDate" type="date" />
+          <p class="countdown" id="countdownText">设置日期后显示倒计时</p>
+        </section>
+
+        <section class="sidebar-section" aria-labelledby="notesTitle">
+          <div class="section-heading section-heading--compact">
+            <div>
+              <p class="section-kicker">随手记</p>
+              <h2 id="notesTitle">私人备注</h2>
+            </div>
+            <i data-lucide="notebook-pen" aria-hidden="true"></i>
+          </div>
+          <textarea
+            class="notes-input"
+            id="personalNotes"
+            rows="5"
+            maxlength="2000"
+            placeholder="航班、宿舍地址、联系人……"
+          ></textarea>
+          <p class="autosave-status" id="autosaveStatus">
+            <i data-lucide="cloud-check" aria-hidden="true"></i>
+            已保存在本机
+          </p>
+        </section>
+
+        <section class="sidebar-section sidebar-section--tip" aria-labelledby="tipTitle">
+          <div class="section-heading section-heading--compact">
+            <div>
+              <p class="section-kicker">打包原则</p>
+              <h2 id="tipTitle">轻装抵港</h2>
+            </div>
+            <i data-lucide="luggage" aria-hidden="true"></i>
+          </div>
+          <p>证件和药物随身携带；床品、锅具与香港规格插线板，确认住处后再买。</p>
+        </section>
+      </aside>
+
+      <section class="workspace" id="checklist" aria-labelledby="checklistTitle">
+        <div class="workspace-heading">
+          <div>
+            <p class="section-kicker">PACKING BOARD</p>
+            <h2 id="checklistTitle">我的准备清单</h2>
+            <p id="resultSummary" class="result-summary">显示全部事项</p>
+          </div>
+          <div class="workspace-actions">
+            <button class="button button--primary" id="addItemButton" type="button">
+              <i data-lucide="plus" aria-hidden="true"></i>
+              添加事项
+            </button>
+            <button class="button button--secondary" id="addCategoryButton" type="button">
+              <i data-lucide="folder-plus" aria-hidden="true"></i>
+              添加分类
+            </button>
+          </div>
+        </div>
+
+        <div class="toolbar" aria-label="清单工具">
+          <label class="search-box" for="searchInput">
+            <i data-lucide="search" aria-hidden="true"></i>
+            <input id="searchInput" type="search" placeholder="搜索事项或备注" autocomplete="off" />
+          </label>
+
+          <div class="segmented-control" id="filterControl" aria-label="筛选事项">
+            <button class="is-active" data-filter="all" type="button">全部</button>
+            <button data-filter="todo" type="button">待办</button>
+            <button data-filter="done" type="button">已完成</button>
+            <button data-filter="important" type="button">关键</button>
+          </div>
+
+          <div class="toolbar-spacer"></div>
+
+          <div class="icon-group" aria-label="显示设置">
+            <button class="icon-button" id="densityButton" type="button" aria-label="切换清单密度" title="切换清单密度">
+              <i data-lucide="rows-3" aria-hidden="true"></i>
+            </button>
+            <button class="icon-button" id="layoutButton" type="button" aria-label="切换单列或双列" title="切换单列或双列">
+              <i data-lucide="columns-2" aria-hidden="true"></i>
+            </button>
+            <button class="icon-button" id="editModeButton" type="button" aria-label="切换整理模式" title="整理分类与事项">
+              <i data-lucide="settings-2" aria-hidden="true"></i>
+            </button>
+            <button class="icon-button" id="moreButton" type="button" aria-label="更多操作" title="更多操作" aria-expanded="false">
+              <i data-lucide="ellipsis" aria-hidden="true"></i>
+            </button>
+          </div>
+
+          <div class="more-menu" id="moreMenu" hidden>
+            <button id="shareNotesButton" type="button">
+              <i data-lucide="share-2" aria-hidden="true"></i>
+              分享到苹果备忘录
+            </button>
+            <button id="copySummaryButton" type="button">
+              <i data-lucide="clipboard-copy" aria-hidden="true"></i>
+              复制进度摘要
+            </button>
+            <button id="exportButton" type="button">
+              <i data-lucide="download" aria-hidden="true"></i>
+              导出备份
+            </button>
+            <button id="importButton" type="button">
+              <i data-lucide="upload" aria-hidden="true"></i>
+              导入备份
+            </button>
+            <button id="printButton" type="button">
+              <i data-lucide="printer" aria-hidden="true"></i>
+              打印清单
+            </button>
+            <button id="resetButton" class="menu-danger" type="button">
+              <i data-lucide="rotate-ccw" aria-hidden="true"></i>
+              恢复默认清单
+            </button>
+          </div>
+          <input id="importFileInput" type="file" accept="application/json,.json" hidden />
+        </div>
+
+        <div class="edit-banner" id="editBanner" hidden>
+          <i data-lucide="grip-vertical" aria-hidden="true"></i>
+          <span>整理模式</span>
+          <button id="exitEditMode" type="button">完成</button>
+        </div>
+
+        <div class="category-grid" id="categoryGrid"></div>
+
+        <div class="empty-state" id="emptyState" hidden>
+          <i data-lucide="package-search" aria-hidden="true"></i>
+          <h3>没有找到对应事项</h3>
+          <p>换个关键词，或清除当前筛选条件。</p>
+          <button class="button button--secondary" id="clearFiltersButton" type="button">清除筛选</button>
+        </div>
+
+        <section class="suggestions-section" id="suggestionsSection" aria-labelledby="suggestionsTitle">
+          <div class="support-heading">
+            <div>
+              <p class="section-kicker">OPTIONAL</p>
+              <h2 id="suggestionsTitle">可选补充</h2>
+              <p>这些不是人人都需要，点按即可加入你的清单。</p>
+            </div>
+            <button class="text-button" id="resetSuggestionsButton" type="button" hidden>
+              重新显示
+            </button>
+          </div>
+          <div class="suggestion-list" id="suggestionList"></div>
+        </section>
+
+        <section class="resources-section" aria-labelledby="resourcesTitle">
+          <div class="support-heading">
+            <div>
+              <p class="section-kicker">BEFORE DEPARTURE</p>
+              <h2 id="resourcesTitle">行前攻略</h2>
+              <p>手续与规则优先查看官方页面，生活经验可作为补充参考。</p>
+            </div>
+          </div>
+
+          <div class="resource-groups">
+            <div class="resource-group">
+              <h3>官方资料</h3>
+              <div class="resource-list">
+                <a href="https://www.immd.gov.hk/eng/services/visas/study.html" target="_blank" rel="noreferrer">
+                  <span class="resource-type">入境处</span>
+                  <span><strong>学生签证与 e-Visa</strong><small>申请、缴费、下载及入境材料</small></span>
+                  <i data-lucide="external-link" aria-hidden="true"></i>
+                </a>
+                <a href="https://www.immd.gov.hk/eng/services/hkid/reg_replace.html" target="_blank" rel="noreferrer">
+                  <span class="resource-type">入境处</span>
+                  <span><strong>香港身份证登记</strong><small>预约方式、办理地点与所需材料</small></span>
+                  <i data-lucide="external-link" aria-hidden="true"></i>
+                </a>
+                <a href="https://www.customs.gov.hk/en/service-enforcement-information/trade-facilitation/prohibited-articles/controlled-imports/index.html" target="_blank" rel="noreferrer">
+                  <span class="resource-type">海关</span>
+                  <span><strong>药品与受管制物品</strong><small>随身药品和个人合理自用量说明</small></span>
+                  <i data-lucide="external-link" aria-hidden="true"></i>
+                </a>
+                <a href="https://smart.eaa.org.hk/en-GB/publication" target="_blank" rel="noreferrer">
+                  <span class="resource-type">地产代理监管局</span>
+                  <span><strong>非本地学生租房指南</strong><small>代理资质、合约与租赁注意事项</small></span>
+                  <i data-lucide="external-link" aria-hidden="true"></i>
+                </a>
+                <a href="https://www.hkma.gov.hk/eng/smart-consumers/account-opening/" target="_blank" rel="noreferrer">
+                  <span class="resource-type">金管局</span>
+                  <span><strong>香港银行开户</strong><small>常见资料要求与银行联络方式</small></span>
+                  <i data-lucide="external-link" aria-hidden="true"></i>
+                </a>
+                <a href="https://www.hko.gov.hk/en/informtc/tcMain.htm" target="_blank" rel="noreferrer">
+                  <span class="resource-type">天文台</span>
+                  <span><strong>台风信号与防风资讯</strong><small>开学季天气警告及应对措施</small></span>
+                  <i data-lucide="external-link" aria-hidden="true"></i>
+                </a>
+                <a href="https://www.emsd.gov.hk/en/electricity_safety/publications/guidance_notes_guidelines/outline_of_electrical_products_safety_regulation/index.html" target="_blank" rel="noreferrer">
+                  <span class="resource-type">机电工程署</span>
+                  <span><strong>插头与电器安全</strong><small>香港插头规格及转换器要求</small></span>
+                  <i data-lucide="external-link" aria-hidden="true"></i>
+                </a>
+              </div>
+            </div>
+
+            <div class="resource-group resource-group--experience">
+              <h3>小红书经验搜索</h3>
+              <div class="resource-list">
+                <a href="https://www.xiaohongshu.com/search_result?keyword=%E6%B8%AF%E7%A1%95%E8%A1%8C%E5%89%8D%E5%87%86%E5%A4%87" target="_blank" rel="noreferrer">
+                  <span class="resource-type">经验</span>
+                  <span><strong>港硕行前准备</strong><small>行李清单与抵港第一周经验</small></span>
+                  <i data-lucide="external-link" aria-hidden="true"></i>
+                </a>
+                <a href="https://www.xiaohongshu.com/search_result?keyword=%E9%A6%99%E6%B8%AF%E7%95%99%E5%AD%A6%E7%A7%9F%E6%88%BF%E9%81%BF%E5%9D%91" target="_blank" rel="noreferrer">
+                  <span class="resource-type">经验</span>
+                  <span><strong>香港留学租房避坑</strong><small>地区、通勤与看房经验</small></span>
+                  <i data-lucide="external-link" aria-hidden="true"></i>
+                </a>
+                <a href="https://www.xiaohongshu.com/search_result?keyword=%E9%A6%99%E6%B8%AF%E7%95%99%E5%AD%A6%E9%93%B6%E8%A1%8C%E5%8D%A1" target="_blank" rel="noreferrer">
+                  <span class="resource-type">经验</span>
+                  <span><strong>香港留学银行卡</strong><small>各银行开户流程与实际体验</small></span>
+                  <i data-lucide="external-link" aria-hidden="true"></i>
+                </a>
+                <a href="https://www.xiaohongshu.com/search_result?keyword=%E9%A6%99%E6%B8%AF%E7%95%99%E5%AD%A6%E7%94%9F%E6%B4%BB" target="_blank" rel="noreferrer">
+                  <span class="resource-type">经验</span>
+                  <span><strong>香港留学生活</strong><small>通信、采购、交通与校园日常</small></span>
+                  <i data-lucide="external-link" aria-hidden="true"></i>
+                </a>
+              </div>
+            </div>
+          </div>
+          <p class="resource-note">经验帖可能含广告或过时信息；签证、租房、药品等事项请以学校及香港官方最新要求为准。</p>
+        </section>
+      </section>
+    </main>
+
+    <dialog class="modal" id="itemDialog">
+      <form method="dialog" id="itemForm">
+        <div class="modal-heading">
+          <div>
+            <p class="section-kicker">CHECKLIST ITEM</p>
+            <h2 id="itemDialogTitle">添加事项</h2>
+          </div>
+          <button class="icon-button modal-close" type="button" data-close-dialog="itemDialog" aria-label="关闭" title="关闭">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+        <input id="editingItemId" type="hidden" />
+        <label class="form-field">
+          <span>所属分类</span>
+          <select id="itemCategory" required></select>
+        </label>
+        <label class="form-field">
+          <span>事项名称</span>
+          <input id="itemText" type="text" maxlength="100" required placeholder="例如：打印学生电子签证" />
+        </label>
+        <label class="form-field">
+          <span>备注 <small>选填</small></span>
+          <textarea id="itemNote" rows="3" maxlength="240" placeholder="尺寸、数量、办理地点……"></textarea>
+        </label>
+        <label class="checkbox-field">
+          <input id="itemImportant" type="checkbox" />
+          <span>标记为关键事项</span>
+        </label>
+        <div class="modal-actions">
+          <button class="button button--ghost" type="button" data-close-dialog="itemDialog">取消</button>
+          <button class="button button--primary" type="submit">保存事项</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="modal" id="categoryDialog">
+      <form method="dialog" id="categoryForm">
+        <div class="modal-heading">
+          <div>
+            <p class="section-kicker">CATEGORY</p>
+            <h2 id="categoryDialogTitle">添加分类</h2>
+          </div>
+          <button class="icon-button modal-close" type="button" data-close-dialog="categoryDialog" aria-label="关闭" title="关闭">
+            <i data-lucide="x" aria-hidden="true"></i>
+          </button>
+        </div>
+        <input id="editingCategoryId" type="hidden" />
+        <label class="form-field">
+          <span>分类名称</span>
+          <input id="categoryName" type="text" maxlength="30" required placeholder="例如：课程预习" />
+        </label>
+        <div class="form-row">
+          <label class="form-field">
+            <span>图标</span>
+            <select id="categoryIcon">
+              <option value="folder-check">文件夹</option>
+              <option value="badge-check">证件</option>
+              <option value="laptop">电脑</option>
+              <option value="shirt">衣物</option>
+              <option value="house">住宿</option>
+              <option value="heart-pulse">健康</option>
+              <option value="map-pinned">抵港</option>
+              <option value="book-open">学习</option>
+              <option value="plane">出行</option>
+              <option value="wallet-cards">财务</option>
+            </select>
+          </label>
+          <label class="form-field color-field">
+            <span>标识颜色</span>
+            <input id="categoryColor" type="color" value="#c63d36" />
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="button button--ghost" type="button" data-close-dialog="categoryDialog">取消</button>
+          <button class="button button--primary" type="submit">保存分类</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="lucide.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
