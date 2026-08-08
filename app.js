@@ -1,6 +1,7 @@
 const STORAGE_KEY = "hk-masters-prep-v1";
 const STORAGE_BACKUP_KEY = "hk-masters-prep-v1-backup";
 const STORAGE_BACKUP_META_KEY = "hk-masters-prep-v1-backup-meta";
+const CURRENT_STATE_VERSION = 2;
 const MAX_CATEGORIES = 60;
 const MAX_ITEMS_PER_CATEGORY = 300;
 const MAX_TOTAL_ITEMS = 2000;
@@ -22,25 +23,67 @@ const iconAllowlist = new Set([
 const optionalSuggestions = [
   suggestion("optional-doc-contact", "documents", "纸质紧急联系人清单", "写明学校、住处、家人及保险联系方式"),
   suggestion("optional-doc-folder", "documents", "防水证件袋", "随身集中存放入境和注册文件"),
+  suggestion("optional-doc-nol", "documents", "无异议通知书 NOL（如获发）", "计划实习或工作时，逐条核对信中许可条件"),
   suggestion("optional-elec-ethernet", "electronics", "短网线", "部分宿舍书桌有有线网络接口"),
   suggestion("optional-elec-stand", "electronics", "便携电脑支架", "长期阅读和写作时改善桌面姿势"),
   suggestion("optional-elec-citation", "electronics", "配置文献管理软件", "提前整理 Zotero、EndNote 或学校数据库账号"),
   suggestion("optional-cloth-swim", "clothes", "泳衣与泳帽", "计划使用学校泳池时再带"),
   suggestion("optional-cloth-shoes", "clothes", "正式鞋", "面试、演讲或正式活动备用"),
   suggestion("optional-live-dehumidifier", "living", "除湿袋", "衣柜潮湿时使用，抵港后也容易购买"),
+  suggestion("optional-live-storage", "living", "衣架、洗衣袋与收纳用品", "确认住处已有物品后少量购买或携带"),
   suggestion("optional-live-sewing", "living", "迷你针线包", "处理纽扣和简单衣物修补"),
   suggestion("optional-live-cutlery", "living", "便携餐具", "外带和校园用餐时按习惯选带"),
   suggestion("optional-health-thermometer", "health", "电子体温计", "生病时方便记录体温"),
   suggestion("optional-health-mosquito", "health", "驱蚊用品", "开学季户外活动或低楼层住处备用"),
+  suggestion("optional-health-summary", "health", "用药清单与病历摘要（按需）", "记录药物通用名、剂量、过敏史和既往病史，便于在港复诊"),
   suggestion("optional-arrival-map", "arrival", "下载校园地图与学校 App", "提前收藏注册处、图书馆和教室位置"),
-  suggestion("optional-arrival-inspection", "arrival", "拍摄入住验房照片", "记录已有损坏、家具及水电表状态"),
   suggestion("optional-arrival-groups", "arrival", "加入课程与学院通知群", "核实群组来源，避免泄露个人资料"),
   suggestion("optional-arrival-library", "arrival", "激活图书馆与数据库权限", "测试校外访问和文献下载"),
+  suggestion("optional-arrival-payment", "arrival", "准备抵港首日支付方式", "带少量港币及可在港使用的银行卡或电子支付，不依赖当天开户"),
+  suggestion("optional-arrival-cash", "arrival", "大额现金入境申报（如适用）", "现金及不记名票据总值超过 HK$120,000 时须向海关申报"),
+  suggestion("optional-living-rental", "living", "核验租约与付款凭证（校外租房）", "核对业主或持牌代理资料、租期、押金、费用与盖印安排"),
 ];
 const optionalSuggestionIds = new Set(optionalSuggestions.map((entry) => entry.id));
+const contentRevisionsV2 = [
+  revision("doc-1", "港澳通行证", "确认有效期覆盖整个行程", "往来港澳通行证（内地学生）", "核对有效期、姓名和证件号码，并确认与签注及 e-Visa 信息一致"),
+  revision("doc-2", "有效逗留签注（D签）", "入境前再次核对", "赴港逗留签注（D）", "内地学生按出入境要求办理；首次入境时与 e-Visa 一并使用"),
+  revision("doc-3", "学生电子签证 e-Visa", "打印 2 份，手机与网盘各留一份", "学生电子签证 e-Visa", "手机离线保存；可另备一张 A4 纸质件"),
+  revision("doc-4", "学校录取与注册材料", "录取信、注册通知、缴费凭证", "完成学校行前门户与注册材料", "核对录取、缴费、签证上传、学生证照片、迎新及选课截止时间"),
+  revision("doc-5", "住宿证明与香港地址", "宿舍确认信或租赁合同", "香港住址、入住联系人与抵达路线", "保存中英文地址、入住时段、钥匙交接和紧急联系方式"),
+  revision("doc-6", "身份证及证件扫描件", "重要文件不要只保存在一个设备", "内地身份证及重要证件备份", "手机离线、加密云端或纸质件至少保留两种方式"),
+  revision("doc-7", "学位证、毕业证、成绩单原件", "按学校注册要求携带", "学校要求的学历证明及核验材料", "只携带注册通知明确要求的原件、认证件或电子文件"),
+  revision("doc-8", "证件照", "白底、小一寸及护照规格各几张", "证件照（按需）", "先核对学校或办理事项指定的尺寸与电子文件要求"),
+  revision("doc-9", "入境凭证 Landing Slip", "抵港后妥善保存", "核对并保存入境凭证（Landing Slip）", "确认入境身份为 Student、核对逗留期限，并立即拍照备份", { moveTo: "arrival" }),
+  revision("elec-2", "手机、耳机与数据线", "重要账号开启双重验证", "手机、耳机与数据线", "保留内地号码收验证码，准备双重验证恢复方式", { importantFrom: false, importantTo: true }),
+  revision("elec-3", "充电宝", "放随身行李并核对航空公司限制", "充电宝", "不得托运；香港机场出发最多 2 个且不得在机上充电，另查承运人规则"),
+  revision("elec-4", "英标转换插头", "带 1–2 个即可", "英标转换插头（BS 1363）", "先带 1–2 个，并确认设备支持 220V"),
+  revision("cloth-1", "短袖或速干上衣 7–10 件", "八九月炎热潮湿", "炎热天气日常衣物", "按 5–7 天洗衣周期准备，结合行李额度调整"),
+  revision("cloth-2", "薄长裤 3–4 条", "通勤和上课使用", "轻薄长裤或裙装", "按课程、通勤与个人习惯准备"),
+  revision("cloth-3", "内衣袜子 7–10 套", "根据洗衣频率调整", "内衣与袜子", "按洗衣频率准备，无需照搬固定数量"),
+  revision("cloth-4", "薄外套或开衫 1–2 件", "应对室内冷气", "薄外套或开衫", "应对室内冷气"),
+  revision("cloth-5", "稍正式的服装 1 套", "演讲、招聘或正式活动", "稍正式的服装", "演讲、招聘或正式活动备用"),
+  revision("cloth-6", "运动服 1–2 套", "按个人习惯调整", "运动服", "按运动习惯和课程需要准备"),
+  revision("cloth-7", "日常运动鞋与防滑鞋", "雨天优先考虑防水防滑", "舒适通勤鞋", "香港步行和坡路较多，雨天注意鞋底防滑"),
+  revision("cloth-8", "折叠伞与轻便雨衣", "放在容易取用的位置", "折叠伞或轻便雨衣", "开学季天气多变，放在容易取用的位置", { importantFrom: true, importantTo: false }),
+  revision("live-1", "确认房间设施与床的尺寸", "避免重复购买和床品尺寸不合", "确认床型、房间配套和首晚床品", "先问宿舍或房东是否提供及具体尺寸，再决定携带或抵港购买"),
+  revision("live-6", "少量衣架、洗衣袋和收纳袋", "不要占满行李箱", "", "", { remove: true }),
+  revision("live-8", "床单与被套", "先确认床型，再决定是否携带", "", "", { remove: true }),
+  revision("health-1", "长期处方药", "保留原包装并携带合理自用量", "个人长期用药（如有）", "保留原包装，按合理自用量携带；处方药随身备处方或用药清单"),
+  revision("health-2", "处方或中英文医生证明", "标明药物通用名称与剂量", "核对药物有效成分与香港管制类别", "如含香港危险药物，须至少提前 10 个工作日申请卫生署书面批准，并按要求携带医生证明"),
+  revision("health-3", "少量常用药", "退烧止痛、肠胃药和创可贴", "个人常用非处方药与急救用品", "只带熟悉药物，保留包装并核对成分、禁忌与有效期"),
+  revision("health-5", "体检、疫苗或保险文件", "以学校具体要求为准", "学校要求的健康或疫苗文件（如有）", "只有学校、宿舍或课程明确要求时准备"),
+  revision("health-6", "核对受管制药物成分", "精神类、抗生素等药物不要随意拆装", "核对香港禁止及受管制物品", "不要携带 CBD、大麻制品、电子烟、加热烟及相关烟弹"),
+  revision("arrival-1", "办理香港本地手机卡或 eSIM", "优先保证抵港后网络可用", "办理香港本地手机卡或 eSIM", "预付卡须实名登记；准备有效身份证明，并先确保抵港后可联网"),
+  revision("arrival-2", "购买或绑定八达通", "超过 25 岁通常使用普通八达通", "准备八达通", "学生优惠须同时符合当学年的年龄、课程和就读模式资格"),
+  revision("arrival-3", "预约香港身份证", "获准逗留超过 180 天者通常需在 30 天内登记", "预约并登记香港身份证", "年满 11 岁且获准逗留超过 180 天者，须在抵港后 30 天内登记"),
+  revision("arrival-4", "完成学校注册与学生证领取", "同步激活校园账号", "完成学校注册与学生证领取", "同步激活校园账号、多重验证和课程平台"),
+  revision("arrival-5", "开立香港银行账户", "提前查看银行所需地址与身份证明", "按需开立香港银行账户", "各银行尽调要求不同，按目标银行核对身份证明、住址信息与开户目的"),
+  revision("arrival-6", "登记本地医疗或学校保险", "保存保单和理赔联系方式", "确认学校医疗及意外保险安排", "核对生效日、门诊和住院范围及理赔流程，保障不足时再自行补充"),
+  revision("arrival-7", "购买香港规格插线板", "选择符合当地安全标准的产品", "购买香港规格插线板", "选择符合当地安全标准的产品，避免万能孔及转换头串接"),
+];
 
 const defaultState = {
-  version: 1,
+  version: CURRENT_STATE_VERSION,
   settings: {
     departureDate: "",
     notes: "",
@@ -59,15 +102,14 @@ const defaultState = {
       color: "#c63d36",
       collapsed: false,
       items: [
-        item("doc-1", "港澳通行证", "确认有效期覆盖整个行程", true),
-        item("doc-2", "有效逗留签注（D签）", "入境前再次核对", true),
-        item("doc-3", "学生电子签证 e-Visa", "打印 2 份，手机与网盘各留一份", true),
-        item("doc-4", "学校录取与注册材料", "录取信、注册通知、缴费凭证", true),
-        item("doc-5", "住宿证明与香港地址", "宿舍确认信或租赁合同", true),
-        item("doc-6", "身份证及证件扫描件", "重要文件不要只保存在一个设备", true),
-        item("doc-7", "学位证、毕业证、成绩单原件", "按学校注册要求携带", false),
-        item("doc-8", "证件照", "白底、小一寸及护照规格各几张", false),
-        item("doc-9", "入境凭证 Landing Slip", "抵港后妥善保存", true),
+        item("doc-1", "往来港澳通行证（内地学生）", "核对有效期、姓名和证件号码，并确认与签注及 e-Visa 信息一致", true),
+        item("doc-2", "赴港逗留签注（D）", "内地学生按出入境要求办理；首次入境时与 e-Visa 一并使用", true),
+        item("doc-3", "学生电子签证 e-Visa", "手机离线保存；可另备一张 A4 纸质件", true),
+        item("doc-4", "完成学校行前门户与注册材料", "核对录取、缴费、签证上传、学生证照片、迎新及选课截止时间", true),
+        item("doc-5", "香港住址、入住联系人与抵达路线", "保存中英文地址、入住时段、钥匙交接和紧急联系方式", true),
+        item("doc-6", "内地身份证及重要证件备份", "手机离线、加密云端或纸质件至少保留两种方式", true),
+        item("doc-7", "学校要求的学历证明及核验材料", "只携带注册通知明确要求的原件、认证件或电子文件", false),
+        item("doc-8", "证件照（按需）", "先核对学校或办理事项指定的尺寸与电子文件要求", false),
       ],
     },
     {
@@ -78,9 +120,9 @@ const defaultState = {
       collapsed: false,
       items: [
         item("elec-1", "笔记本电脑与充电器", "提前安装课程所需软件", true),
-        item("elec-2", "手机、耳机与数据线", "重要账号开启双重验证", false),
-        item("elec-3", "充电宝", "放随身行李并核对航空公司限制", false),
-        item("elec-4", "英标转换插头", "带 1–2 个即可", true),
+        item("elec-2", "手机、耳机与数据线", "保留内地号码收验证码，准备双重验证恢复方式", true),
+        item("elec-3", "充电宝", "不得托运；香港机场出发最多 2 个且不得在机上充电，另查承运人规则", false),
+        item("elec-4", "英标转换插头（BS 1363）", "先带 1–2 个，并确认设备支持 220V", true),
         item("elec-5", "USB-C 扩展坞与移动硬盘", "按设备接口选带", false),
         item("elec-6", "鼠标与电脑包", "优先选择轻便款", false),
         item("elec-7", "纸笔与文件夹", "少量即可，抵港后容易补充", false),
@@ -94,14 +136,14 @@ const defaultState = {
       color: "#356ca5",
       collapsed: false,
       items: [
-        item("cloth-1", "短袖或速干上衣 7–10 件", "八九月炎热潮湿", false),
-        item("cloth-2", "薄长裤 3–4 条", "通勤和上课使用", false),
-        item("cloth-3", "内衣袜子 7–10 套", "根据洗衣频率调整", false),
-        item("cloth-4", "薄外套或开衫 1–2 件", "应对室内冷气", false),
-        item("cloth-5", "稍正式的服装 1 套", "演讲、招聘或正式活动", false),
-        item("cloth-6", "运动服 1–2 套", "按个人习惯调整", false),
-        item("cloth-7", "日常运动鞋与防滑鞋", "雨天优先考虑防水防滑", false),
-        item("cloth-8", "折叠伞与轻便雨衣", "放在容易取用的位置", true),
+        item("cloth-1", "炎热天气日常衣物", "按 5–7 天洗衣周期准备，结合行李额度调整", false),
+        item("cloth-2", "轻薄长裤或裙装", "按课程、通勤与个人习惯准备", false),
+        item("cloth-3", "内衣与袜子", "按洗衣频率准备，无需照搬固定数量", false),
+        item("cloth-4", "薄外套或开衫", "应对室内冷气", false),
+        item("cloth-5", "稍正式的服装", "演讲、招聘或正式活动备用", false),
+        item("cloth-6", "运动服", "按运动习惯和课程需要准备", false),
+        item("cloth-7", "舒适通勤鞋", "香港步行和坡路较多，雨天注意鞋底防滑", false),
+        item("cloth-8", "折叠伞或轻便雨衣", "开学季天气多变，放在容易取用的位置", false),
         item("cloth-9", "帽子与防晒用品", "开学季户外通勤使用", false),
       ],
     },
@@ -112,14 +154,13 @@ const defaultState = {
       color: "#8b5d42",
       collapsed: false,
       items: [
-        item("live-1", "确认房间设施与床的尺寸", "避免重复购买和床品尺寸不合", true),
+        item("live-1", "确认床型、房间配套和首晚床品", "先问宿舍或房东是否提供及具体尺寸，再决定携带或抵港购买", true),
         item("live-2", "洗漱用品 3–5 天用量", "其余抵港后购买", false),
         item("live-3", "毛巾、拖鞋与水杯", "保证抵港当天可用", false),
         item("live-4", "眼罩与耳塞", "宿舍或合租环境备用", false),
         item("live-5", "小锁与行李牌", "用于行李和储物柜", false),
-        item("live-6", "少量衣架、洗衣袋和收纳袋", "不要占满行李箱", false),
         item("live-7", "折叠购物袋", "日常采购使用", false),
-        item("live-8", "床单与被套", "先确认床型，再决定是否携带", false),
+        item("live-9", "准备抵港首日支付方式", "带少量港币及可在港使用的银行卡或电子支付，不依赖当天开户", true),
       ],
     },
     {
@@ -129,12 +170,12 @@ const defaultState = {
       color: "#9d4674",
       collapsed: false,
       items: [
-        item("health-1", "长期处方药", "保留原包装并携带合理自用量", true),
-        item("health-2", "处方或中英文医生证明", "标明药物通用名称与剂量", true),
-        item("health-3", "少量常用药", "退烧止痛、肠胃药和创可贴", false),
+        item("health-1", "个人长期用药（如有）", "保留原包装，按合理自用量携带；处方药随身备处方或用药清单", true),
+        item("health-2", "核对药物有效成分与香港管制类别", "如含香港危险药物，须至少提前 10 个工作日申请卫生署书面批准，并按要求携带医生证明", true),
+        item("health-3", "个人常用非处方药与急救用品", "只带熟悉药物，保留包装并核对成分、禁忌与有效期", false),
         item("health-4", "眼镜与备用眼镜", "隐形眼镜用户带护理用品", false),
-        item("health-5", "体检、疫苗或保险文件", "以学校具体要求为准", false),
-        item("health-6", "核对受管制药物成分", "精神类、抗生素等药物不要随意拆装", true),
+        item("health-5", "学校要求的健康或疫苗文件（如有）", "只有学校、宿舍或课程明确要求时准备", false),
+        item("health-6", "核对香港禁止及受管制物品", "不要携带 CBD、大麻制品、电子烟、加热烟及相关烟弹", true),
       ],
     },
     {
@@ -144,14 +185,16 @@ const defaultState = {
       color: "#b57822",
       collapsed: false,
       items: [
-        item("arrival-1", "办理香港本地手机卡或 eSIM", "优先保证抵港后网络可用", false),
-        item("arrival-2", "购买或绑定八达通", "超过 25 岁通常使用普通八达通", false),
-        item("arrival-3", "预约香港身份证", "获准逗留超过 180 天者通常需在 30 天内登记", true),
-        item("arrival-4", "完成学校注册与学生证领取", "同步激活校园账号", true),
-        item("arrival-5", "开立香港银行账户", "提前查看银行所需地址与身份证明", false),
-        item("arrival-6", "登记本地医疗或学校保险", "保存保单和理赔联系方式", false),
-        item("arrival-7", "购买香港规格插线板", "选择符合当地安全标准的产品", false),
+        item("arrival-1", "办理香港本地手机卡或 eSIM", "预付卡须实名登记；准备有效身份证明，并先确保抵港后可联网", false),
+        item("arrival-2", "准备八达通", "学生优惠须同时符合当学年的年龄、课程和就读模式资格", false),
+        item("arrival-3", "预约并登记香港身份证", "年满 11 岁且获准逗留超过 180 天者，须在抵港后 30 天内登记", true),
+        item("arrival-4", "完成学校注册与学生证领取", "同步激活校园账号、多重验证和课程平台", true),
+        item("arrival-5", "按需开立香港银行账户", "各银行尽调要求不同，按目标银行核对身份证明、住址信息与开户目的", false),
+        item("arrival-6", "确认学校医疗及意外保险安排", "核对生效日、门诊和住院范围及理赔流程，保障不足时再自行补充", false),
+        item("arrival-7", "购买香港规格插线板", "选择符合当地安全标准的产品，避免万能孔及转换头串接", false),
         item("arrival-8", "补齐床品、清洁和厨房用品", "确认房间和室友已有物品后购买", false),
+        item("doc-9", "核对并保存入境凭证（Landing Slip）", "确认入境身份为 Student、核对逗留期限，并立即拍照备份", true),
+        item("arrival-9", "完成入住验房与交接", "记录已有损坏、家具及水电表状态，保存钥匙和付款交接凭证", false),
       ],
     },
   ],
@@ -252,8 +295,128 @@ function suggestion(id, categoryId, text, note = "") {
   return { id, categoryId, text, note };
 }
 
+function revision(id, fromText, fromNote, text, note, options = {}) {
+  return { id, fromText, fromNote, text, note, ...options };
+}
+
 function cloneDefaults() {
   return JSON.parse(JSON.stringify(defaultState));
+}
+
+function migrateState(candidate) {
+  if (!candidate || !Array.isArray(candidate.categories)) return candidate;
+  const version = Number.isInteger(candidate.version) ? candidate.version : 1;
+  if (version >= CURRENT_STATE_VERSION) return candidate;
+
+  const migrated = JSON.parse(JSON.stringify(candidate));
+  const categoryById = new Map(migrated.categories.map((category) => [category.id, category]));
+
+  contentRevisionsV2.forEach((change) => {
+    let sourceCategory = null;
+    let entry = null;
+    for (const category of migrated.categories) {
+      const found = Array.isArray(category.items)
+        ? category.items.find((candidateEntry) => candidateEntry?.id === change.id)
+        : null;
+      if (found) {
+        sourceCategory = category;
+        entry = found;
+        break;
+      }
+    }
+    if (!entry || entry.text !== change.fromText || entry.note !== change.fromNote) return;
+
+    if (change.remove) {
+      sourceCategory.items = sourceCategory.items.filter((candidateEntry) => candidateEntry !== entry);
+      return;
+    }
+
+    entry.text = change.text;
+    entry.note = change.note;
+    if (entry.important === change.importantFrom) entry.important = change.importantTo;
+
+    if (change.moveTo && sourceCategory?.id !== change.moveTo) {
+      const destination = categoryById.get(change.moveTo);
+      if (destination && !destination.items?.some((candidateEntry) => candidateEntry?.id === change.id)) {
+        sourceCategory.items = sourceCategory.items.filter((candidateEntry) => candidateEntry !== entry);
+        if (!Array.isArray(destination.items)) destination.items = [];
+        destination.items.push(entry);
+      }
+    }
+  });
+
+  const arrival = categoryById.get("arrival");
+  migrated.categories.forEach((category) => {
+    if (!Array.isArray(category.items)) return;
+    category.items.forEach((entry) => {
+      const isOldInspectionSuggestion =
+        entry?.sourceSuggestionId === "optional-arrival-inspection" ||
+        (entry?.text === "拍摄入住验房照片" && entry?.note === "记录已有损坏、家具及水电表状态");
+      if (!isOldInspectionSuggestion) return;
+      entry.text = "完成入住验房与交接";
+      entry.note = "记录已有损坏、家具及水电表状态，保存钥匙和付款交接凭证";
+    });
+  });
+  const hasInspectionItem = migrated.categories.some((category) =>
+    Array.isArray(category.items) &&
+    category.items.some(
+      (entry) =>
+        entry?.id === "arrival-9" ||
+        entry?.sourceSuggestionId === "optional-arrival-inspection" ||
+        entry?.text === "拍摄入住验房照片",
+    ),
+  );
+  const totalItemCount = () =>
+    migrated.categories.reduce(
+      (sum, category) => sum + (Array.isArray(category.items) ? category.items.length : 0),
+      0,
+    );
+  if (
+    arrival &&
+    !hasInspectionItem &&
+    (arrival.items?.length ?? 0) < MAX_ITEMS_PER_CATEGORY &&
+    totalItemCount() < MAX_TOTAL_ITEMS
+  ) {
+    if (!Array.isArray(arrival.items)) arrival.items = [];
+    arrival.items.push(
+      item(
+        "arrival-9",
+        "完成入住验房与交接",
+        "记录已有损坏、家具及水电表状态，保存钥匙和付款交接凭证",
+        false,
+      ),
+    );
+  }
+
+  const living = categoryById.get("living");
+  const hasFirstDayPayment = migrated.categories.some((category) =>
+    Array.isArray(category.items) &&
+    category.items.some(
+      (entry) =>
+        entry?.id === "live-9" ||
+        entry?.sourceSuggestionId === "optional-arrival-payment" ||
+        entry?.text === "准备抵港首日支付方式",
+    ),
+  );
+  if (
+    living &&
+    !hasFirstDayPayment &&
+    (living.items?.length ?? 0) < MAX_ITEMS_PER_CATEGORY &&
+    totalItemCount() < MAX_TOTAL_ITEMS
+  ) {
+    if (!Array.isArray(living.items)) living.items = [];
+    living.items.push(
+      item(
+        "live-9",
+        "准备抵港首日支付方式",
+        "带少量港币及可在港使用的银行卡或电子支付，不依赖当天开户",
+        true,
+      ),
+    );
+  }
+
+  migrated.version = CURRENT_STATE_VERSION;
+  return migrated;
 }
 
 function makeId(prefix) {
@@ -267,7 +430,17 @@ function loadState() {
     if (!saved) return cloneDefaults();
 
     try {
-      return normalizeState(JSON.parse(saved));
+      const parsed = JSON.parse(saved);
+      const normalized = normalizeState(parsed);
+      if ((Number.isInteger(parsed.version) ? parsed.version : 1) < CURRENT_STATE_VERSION) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+          loadNotice = "已更新清单中的规则性表述，个人修改和进度已保留";
+        } catch (migrationSaveError) {
+          console.warn("Could not persist migrated checklist", migrationSaveError);
+        }
+      }
+      return normalized;
     } catch (error) {
       primaryStateWasInvalid = true;
       const backup = localStorage.getItem(STORAGE_BACKUP_KEY);
@@ -289,6 +462,7 @@ function loadState() {
 }
 
 function normalizeState(candidate, { strictLimits = false } = {}) {
+  candidate = migrateState(candidate);
   if (!candidate || !Array.isArray(candidate.categories)) throw new Error("Invalid backup");
 
   const totalItems = candidate.categories.reduce(
@@ -329,7 +503,7 @@ function normalizeState(candidate, { strictLimits = false } = {}) {
   }));
 
   return {
-    version: 1,
+    version: CURRENT_STATE_VERSION,
     settings: {
       departureDate: /^\d{4}-\d{2}-\d{2}$/.test(settings.departureDate)
         ? settings.departureDate
@@ -626,12 +800,14 @@ function renderFocusPanel() {
                 };
 
   const categoryOrder = new Map(phases.categories.map((categoryId, index) => [categoryId, index]));
-  const undone = state.categories
+  const allUndone = state.categories
     .flatMap((category) =>
       category.items
         .filter((entry) => !entry.done)
         .map((entry, itemIndex) => ({ category, entry, itemIndex })),
-    )
+    );
+  const undone = allUndone
+    .filter(({ category }) => (days !== null && days < 0 ? category.id === "arrival" : category.id !== "arrival"))
     .sort((left, right) => {
       const importantDifference = Number(right.entry.important) - Number(left.entry.important);
       if (importantDifference) return importantDifference;
@@ -641,10 +817,16 @@ function renderFocusPanel() {
     });
 
   elements.focusPhase.textContent = phases.phase;
-  elements.focusTitle.textContent = undone.length ? phases.title : "当前清单已经完成";
+  elements.focusTitle.textContent = undone.length
+    ? phases.title
+    : allUndone.length
+      ? "当前阶段已完成"
+      : "当前清单已经完成";
   elements.focusDescription.textContent = undone.length
     ? phases.description
-    : "可以导出一份备份，或继续添加个人需要的事项。";
+    : allUndone.length
+      ? "其余阶段仍有事项，可在下方清单中继续处理。"
+      : "可以导出一份备份，或继续添加个人需要的事项。";
   elements.focusItems.innerHTML = "";
 
   undone.slice(0, 3).forEach(({ category, entry }) => {
@@ -657,15 +839,14 @@ function renderFocusPanel() {
     elements.focusItems.appendChild(button);
   });
 
-  elements.focusActionButton.textContent = undone.some(({ entry }) => entry.important)
-    ? days === null
+  elements.focusActionButton.textContent =
+    days === null
       ? "设置出发日期"
-      : "查看关键待办"
-    : undone.length
-      ? days === null
-        ? "设置出发日期"
-        : "查看全部待办"
-      : "导出备份";
+      : undone.length
+        ? "查看当前阶段"
+        : allUndone.length
+          ? "查看剩余事项"
+          : "导出备份";
 }
 
 function renderCategories() {
@@ -1742,12 +1923,17 @@ elements.focusActionButton.addEventListener("click", () => {
     requestAnimationFrame(() => elements.departureDate.focus({ preventScroll: true }));
     return;
   }
-  const undone = state.categories.flatMap((category) => category.items).filter((entry) => !entry.done);
-  if (!undone.length) {
+  const allUndone = state.categories.flatMap((category) => category.items).filter((entry) => !entry.done);
+  if (!allUndone.length) {
     exportBackup();
     return;
   }
-  state.settings.filter = undone.some((entry) => entry.important) ? "important" : "todo";
+  const firstFocusItem = elements.focusItems.querySelector("button[data-focus-item-id]");
+  if (firstFocusItem) {
+    firstFocusItem.click();
+    return;
+  }
+  state.settings.filter = "todo";
   state.settings.search = "";
   saveState(undefined, { skipRecoveryUpdate: true, preserveUndo: true });
   render();
