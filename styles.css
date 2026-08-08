@@ -1065,7 +1065,8 @@ body.density-compact .item-note {
 }
 
 .suggestions-section,
-.resources-section {
+.resources-section,
+.comments-section {
   margin-top: 38px;
   padding-top: 26px;
   border-top: 1px solid var(--line-strong);
@@ -1251,6 +1252,62 @@ body.density-compact .item-note {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.5;
+}
+
+.comments-section {
+  padding-bottom: 8px;
+}
+
+.comments-heading {
+  margin-bottom: 14px;
+}
+
+.comments-notice {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  padding: 11px 4px 13px;
+  border-block: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.comments-notice svg {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: var(--teal);
+}
+
+.comments-notice p,
+.comments-status {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.comments-frame {
+  min-height: 190px;
+  padding-top: 18px;
+}
+
+.comments-status {
+  padding: 28px 4px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.comments-status[hidden] {
+  display: none;
+}
+
+.comments-status--error {
+  color: var(--red);
+}
+
+.giscus,
+.giscus-frame {
+  width: 100%;
 }
 
 .modal {
@@ -1807,6 +1864,10 @@ body.density-compact .item-note {
   .resource-list a {
     grid-template-columns: 78px minmax(0, 1fr) 16px;
   }
+
+  .comments-frame {
+    min-height: 220px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1834,6 +1895,7 @@ body.density-compact .item-note {
   .context-menu,
   .suggestions-section,
   .resources-section,
+  .comments-section,
   .sidebar-section--tip,
   .toast {
     display: none !important;

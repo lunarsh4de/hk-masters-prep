@@ -2072,6 +2072,33 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeContextMenu(true);
 });
 
+const commentsRoot = document.querySelector(".giscus");
+const commentsStatus = document.querySelector("#commentsStatus");
+
+if (commentsRoot && commentsStatus) {
+  const updateCommentsStatus = () => {
+    const commentsFrame = commentsRoot.querySelector(".giscus-frame");
+    if (!commentsFrame) return false;
+    commentsStatus.hidden = true;
+    return true;
+  };
+
+  if (!updateCommentsStatus()) {
+    const commentsObserver = new MutationObserver(() => {
+      if (!updateCommentsStatus()) return;
+      commentsObserver.disconnect();
+    });
+    commentsObserver.observe(commentsRoot, { childList: true });
+
+    window.setTimeout(() => {
+      if (updateCommentsStatus()) return;
+      commentsObserver.disconnect();
+      commentsStatus.textContent = "评论区加载失败，请检查网络后刷新重试。";
+      commentsStatus.classList.add("comments-status--error");
+    }, 12000);
+  }
+}
+
 render();
 if (loadNotice) showToast(loadNotice, { duration: 5200 });
 
