@@ -1,4 +1,11 @@
 const STORAGE_KEY = "hk-masters-prep-v1";
+const STORAGE_BACKUP_KEY = "hk-masters-prep-v1-backup";
+const STORAGE_BACKUP_META_KEY = "hk-masters-prep-v1-backup-meta";
+const MAX_CATEGORIES = 60;
+const MAX_ITEMS_PER_CATEGORY = 300;
+const MAX_TOTAL_ITEMS = 2000;
+const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+const MAX_UNDO_ACTIONS = 10;
 const iconAllowlist = new Set([
   "folder-check",
   "badge-check",
@@ -150,11 +157,32 @@ const defaultState = {
   ],
 };
 
+let loadNotice = "";
+let primaryStateWasInvalid = false;
 let state = loadState();
 let toastTimer;
+let toastActionCallback = null;
+let undoStack = [];
 let contextTarget = null;
+let contextReturnFocus = null;
 let longPressTimer = null;
 let longPressStart = null;
+let longPressActivatedTarget = null;
+let suppressedClickTarget = null;
+let suppressClickUntil = 0;
+let suppressClickTimer = null;
+
+function armLongPressClickSuppression() {
+  if (!longPressActivatedTarget) return;
+  suppressedClickTarget = longPressActivatedTarget;
+  suppressClickUntil = performance.now() + 500;
+  clearTimeout(suppressClickTimer);
+  suppressClickTimer = setTimeout(() => {
+    suppressedClickTarget = null;
+    suppressClickUntil = 0;
+  }, 520);
+  longPressActivatedTarget = null;
+}
 
 const elements = {
   categoryGrid: document.querySelector("#categoryGrid"),
@@ -165,9 +193,18 @@ const elements = {
   criticalCount: document.querySelector("#criticalCount"),
   departureDate: document.querySelector("#departureDate"),
   countdownText: document.querySelector("#countdownText"),
+  sidebar: document.querySelector(".sidebar"),
+  mobileOverviewToggle: document.querySelector("#mobileOverviewToggle"),
   personalNotes: document.querySelector("#personalNotes"),
   autosaveStatus: document.querySelector("#autosaveStatus"),
+  autosaveText: document.querySelector("#autosaveText"),
   resultSummary: document.querySelector("#resultSummary"),
+  focusPanel: document.querySelector("#focusPanel"),
+  focusPhase: document.querySelector("#focusPhase"),
+  focusTitle: document.querySelector("#focusTitle"),
+  focusDescription: document.querySelector("#focusDescription"),
+  focusItems: document.querySelector("#focusItems"),
+  focusActionButton: document.querySelector("#focusActionButton"),
   searchInput: document.querySelector("#searchInput"),
   filterControl: document.querySelector("#filterControl"),
   densityButton: document.querySelector("#densityButton"),
@@ -177,7 +214,12 @@ const elements = {
   contextMenu: document.querySelector("#contextMenu"),
   moreButton: document.querySelector("#moreButton"),
   moreMenu: document.querySelector("#moreMenu"),
+  undoButton: document.querySelector("#undoButton"),
+  restoreBackupButton: document.querySelector("#restoreBackupButton"),
   emptyState: document.querySelector("#emptyState"),
+  emptyStateTitle: document.querySelector("#emptyStateTitle"),
+  emptyStateText: document.querySelector("#emptyStateText"),
+  clearFiltersButton: document.querySelector("#clearFiltersButton"),
   itemDialog: document.querySelector("#itemDialog"),
   itemForm: document.querySelector("#itemForm"),
   itemDialogTitle: document.querySelector("#itemDialogTitle"),
@@ -198,10 +240,12 @@ const elements = {
   suggestionList: document.querySelector("#suggestionList"),
   resetSuggestionsButton: document.querySelector("#resetSuggestionsButton"),
   toast: document.querySelector("#toast"),
+  toastMessage: document.querySelector("#toastMessage"),
+  toastAction: document.querySelector("#toastAction"),
 };
 
-function item(id, text, note = "", important = false) {
-  return { id, text, note, important, done: false };
+function item(id, text, note = "", important = false, sourceSuggestionId = "") {
+  return { id, text, note, important, done: false, sourceSuggestionId };
 }
 
 function suggestion(id, categoryId, text, note = "") {
@@ -220,31 +264,66 @@ function makeId(prefix) {
 function loadState() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? normalizeState(JSON.parse(saved)) : cloneDefaults();
+    if (!saved) return cloneDefaults();
+
+    try {
+      return normalizeState(JSON.parse(saved));
+    } catch (error) {
+      primaryStateWasInvalid = true;
+      const backup = localStorage.getItem(STORAGE_BACKUP_KEY);
+      if (backup) {
+        try {
+          loadNotice = "本地数据异常，已恢复上一份可用版本";
+          return normalizeState(JSON.parse(backup));
+        } catch (backupError) {
+          console.warn("Could not load backup checklist", backupError);
+        }
+      }
+      throw error;
+    }
   } catch (error) {
     console.warn("Could not load saved checklist", error);
+    loadNotice = "本地数据无法读取，已载入默认清单";
     return cloneDefaults();
   }
 }
 
-function normalizeState(candidate) {
+function normalizeState(candidate, { strictLimits = false } = {}) {
   if (!candidate || !Array.isArray(candidate.categories)) throw new Error("Invalid backup");
+
+  const totalItems = candidate.categories.reduce(
+    (sum, category) => sum + (Array.isArray(category?.items) ? category.items.length : 0),
+    0,
+  );
+  if (
+    strictLimits &&
+    (candidate.categories.length > MAX_CATEGORIES ||
+      candidate.categories.some((category) => Array.isArray(category?.items) && category.items.length > MAX_ITEMS_PER_CATEGORY) ||
+      totalItems > MAX_TOTAL_ITEMS)
+  ) {
+    throw new Error("Backup exceeds checklist limits");
+  }
 
   const defaults = cloneDefaults();
   const settings = candidate.settings ?? {};
-  const categories = candidate.categories.slice(0, 60).map((category, categoryIndex) => ({
-    id: safeId(category.id, `category-${categoryIndex}`),
+  const categoryIds = new Set();
+  const itemIds = new Set();
+  const categories = candidate.categories.map((category, categoryIndex) => ({
+    id: uniqueSafeId(category.id, `category-${categoryIndex}`, categoryIds),
     name: safeText(category.name, "未命名分类", 30),
     icon: iconAllowlist.has(category.icon) ? category.icon : "folder-check",
     color: /^#[0-9a-f]{6}$/i.test(category.color) ? category.color : "#c63d36",
     collapsed: Boolean(category.collapsed),
     items: Array.isArray(category.items)
-      ? category.items.slice(0, 300).map((entry, itemIndex) => ({
-          id: safeId(entry.id, `item-${categoryIndex}-${itemIndex}`),
+      ? category.items.map((entry, itemIndex) => ({
+          id: uniqueSafeId(entry.id, `item-${categoryIndex}-${itemIndex}`, itemIds),
           text: safeText(entry.text, "未命名事项", 100),
           note: safeText(entry.note, "", 240),
           important: Boolean(entry.important),
           done: Boolean(entry.done),
+          sourceSuggestionId: optionalSuggestionIds.has(entry.sourceSuggestionId)
+            ? entry.sourceSuggestionId
+            : "",
         }))
       : [],
   }));
@@ -279,11 +358,155 @@ function safeId(value, fallback) {
   return typeof value === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(value) ? value : fallback;
 }
 
-function saveState(message) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  elements.autosaveStatus.innerHTML = '<i data-lucide="cloud-check" aria-hidden="true"></i> 已保存在本机';
-  refreshIcons();
-  if (message) showToast(message);
+function uniqueSafeId(value, fallback, usedIds) {
+  const base = safeId(value, fallback);
+  let candidate = base;
+  let suffix = 2;
+  while (usedIds.has(candidate)) {
+    const suffixText = `-${suffix}`;
+    candidate = `${base.slice(0, 100 - suffixText.length)}${suffixText}`;
+    suffix += 1;
+  }
+  usedIds.add(candidate);
+  return candidate;
+}
+
+function cloneState(source = state) {
+  return JSON.parse(JSON.stringify(source));
+}
+
+function recoveryMetadata(snapshot, label, snapshotLength) {
+  return {
+    savedAt: new Date().toISOString(),
+    label,
+    categoryCount: snapshot.categories.length,
+    itemCount: snapshot.categories.reduce((sum, category) => sum + category.items.length, 0),
+    snapshotLength,
+  };
+}
+
+function writeRecoverySnapshot(snapshot, label = "自动保存的上一版本") {
+  try {
+    const normalized = normalizeState(cloneState(snapshot), { strictLimits: true });
+    const serialized = JSON.stringify(normalized);
+    localStorage.setItem(STORAGE_BACKUP_KEY, serialized);
+    try {
+      localStorage.setItem(
+        STORAGE_BACKUP_META_KEY,
+        JSON.stringify(recoveryMetadata(normalized, label, serialized.length)),
+      );
+    } catch (metaError) {
+      console.warn("Could not update recovery metadata", metaError);
+      try {
+        localStorage.removeItem(STORAGE_BACKUP_META_KEY);
+      } catch (cleanupError) {
+        console.warn("Could not clear stale recovery metadata", cleanupError);
+      }
+    }
+    return true;
+  } catch (error) {
+    console.warn("Could not update local recovery snapshot", error);
+    return false;
+  }
+}
+
+function captureRecoveryStorage() {
+  try {
+    return {
+      snapshot: localStorage.getItem(STORAGE_BACKUP_KEY),
+      metadata: localStorage.getItem(STORAGE_BACKUP_META_KEY),
+    };
+  } catch (error) {
+    console.warn("Could not capture local recovery snapshot", error);
+    return { snapshot: null, metadata: null };
+  }
+}
+
+function restoreRecoveryStorage(previous) {
+  try {
+    for (const [key, value] of [
+      [STORAGE_BACKUP_KEY, previous.snapshot],
+      [STORAGE_BACKUP_META_KEY, previous.metadata],
+    ]) {
+      if (value === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, value);
+    }
+    return true;
+  } catch (error) {
+    console.warn("Could not roll back local recovery snapshot", error);
+    return false;
+  }
+}
+
+function readRecoverySnapshot() {
+  try {
+    const saved = localStorage.getItem(STORAGE_BACKUP_KEY);
+    if (!saved) return null;
+    const snapshot = normalizeState(JSON.parse(saved), { strictLimits: true });
+    const metadata = {
+      label: "上一份本地版本",
+      savedAt: "",
+      categoryCount: snapshot.categories.length,
+      itemCount: snapshot.categories.reduce((sum, category) => sum + category.items.length, 0),
+    };
+    try {
+      const storedMetadata = JSON.parse(localStorage.getItem(STORAGE_BACKUP_META_KEY) || "{}");
+      if (storedMetadata.snapshotLength === saved.length) {
+        if (typeof storedMetadata.label === "string") {
+          metadata.label = safeText(storedMetadata.label, metadata.label, 100);
+        }
+        if (typeof storedMetadata.savedAt === "string" && !Number.isNaN(Date.parse(storedMetadata.savedAt))) {
+          metadata.savedAt = storedMetadata.savedAt;
+        }
+      }
+    } catch (error) {
+      console.warn("Could not read recovery metadata", error);
+    }
+    return { snapshot, metadata };
+  } catch (error) {
+    console.warn("Could not read local recovery snapshot", error);
+    return null;
+  }
+}
+
+function invalidateUndoStack() {
+  if (!undoStack.length) return;
+  undoStack = [];
+  if (toastActionCallback === undoLatestAction) {
+    toastActionCallback = null;
+    elements.toastAction.hidden = true;
+  }
+  updateRecoveryActions();
+}
+
+function saveState(message, { skipRecoveryUpdate = false, preserveUndo = false } = {}) {
+  const serialized = JSON.stringify(state);
+  try {
+    const previous = localStorage.getItem(STORAGE_KEY);
+    localStorage.setItem(STORAGE_KEY, serialized);
+    if (!skipRecoveryUpdate && !primaryStateWasInvalid && previous && previous !== serialized) {
+      try {
+        const previousState = normalizeState(JSON.parse(previous), { strictLimits: true });
+        writeRecoverySnapshot(previousState);
+      } catch (previousError) {
+        console.warn("Skipped invalid local recovery source", previousError);
+      }
+    }
+    primaryStateWasInvalid = false;
+    if (!preserveUndo) invalidateUndoStack();
+    elements.autosaveStatus.classList.remove("is-error");
+    elements.autosaveText.textContent = "仅保存在此浏览器";
+    updateRecoveryActions();
+    if (message) showToast(message);
+    return true;
+  } catch (error) {
+    console.warn("Could not save checklist", error);
+    if (!preserveUndo) invalidateUndoStack();
+    elements.autosaveStatus.classList.add("is-error");
+    elements.autosaveText.textContent = "未能保存，请立即导出备份";
+    showToast("修改暂时只保留在当前页面");
+    return false;
+  }
 }
 
 function refreshIcons() {
@@ -296,6 +519,8 @@ function render() {
   elements.categoryGrid.classList.toggle("layout-single", state.settings.layout === "single");
   elements.densityButton.classList.toggle("is-active", state.settings.density === "compact");
   elements.layoutButton.classList.toggle("is-active", state.settings.layout === "single");
+  elements.densityButton.setAttribute("aria-pressed", String(state.settings.density === "compact"));
+  elements.layoutButton.setAttribute("aria-pressed", String(state.settings.layout === "single"));
   elements.editBanner.hidden = !state.settings.editMode;
   elements.departureDate.value = state.settings.departureDate;
   elements.personalNotes.value = state.settings.notes;
@@ -303,12 +528,15 @@ function render() {
 
   for (const button of elements.filterControl.querySelectorAll("button")) {
     button.classList.toggle("is-active", button.dataset.filter === state.settings.filter);
+    button.setAttribute("aria-pressed", String(button.dataset.filter === state.settings.filter));
   }
 
   renderStats();
   renderCountdown();
+  renderFocusPanel();
   renderCategories();
   renderSuggestions();
+  updateRecoveryActions();
   refreshIcons();
 }
 
@@ -344,6 +572,102 @@ function renderCountdown() {
   else elements.countdownText.textContent = `出发日已过去 ${Math.abs(days)} 天`;
 }
 
+function daysUntilDeparture() {
+  if (!state.settings.departureDate) return null;
+  const departure = new Date(`${state.settings.departureDate}T00:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((departure - today) / 86400000);
+}
+
+function renderFocusPanel() {
+  const days = daysUntilDeparture();
+  const phases =
+    days === null
+      ? {
+          phase: "当前焦点",
+          title: "先处理关键待办",
+          description: "设置出发日期后，会按阶段调整建议顺序。",
+          categories: ["documents", "living", "health", "electronics", "clothes", "arrival"],
+        }
+      : days > 30
+        ? {
+            phase: "出发 30 天以上",
+            title: "先确认长期手续与住处",
+            description: "优先处理证件、住宿和需要提前准备的健康材料。",
+            categories: ["documents", "living", "health", "electronics", "clothes", "arrival"],
+          }
+        : days > 14
+          ? {
+              phase: "出发前 15–30 天",
+              title: "补齐材料，开始安排生活",
+              description: "复核注册材料、住宿细节和抵港后的基础安排。",
+              categories: ["documents", "living", "electronics", "health", "clothes", "arrival"],
+            }
+          : days > 3
+            ? {
+                phase: "出发前 4–14 天",
+                title: "进入打包与复核阶段",
+                description: "把关键文件、设备和药物放到容易确认的位置。",
+                categories: ["documents", "electronics", "health", "clothes", "living", "arrival"],
+              }
+            : days >= 0
+              ? {
+                  phase: days === 0 ? "今天出发" : `出发前 ${days} 天`,
+                  title: "只看不能遗漏的事项",
+                  description: "集中完成仍未勾选的关键事项，避免临行前分散注意力。",
+                  categories: ["documents", "electronics", "health", "clothes", "living", "arrival"],
+                }
+              : {
+                  phase: "抵港后",
+                  title: "继续完成落地办理",
+                  description: "优先处理学校注册、香港身份证、通信和银行等事项。",
+                  categories: ["arrival", "documents", "health", "living", "electronics", "clothes"],
+                };
+
+  const categoryOrder = new Map(phases.categories.map((categoryId, index) => [categoryId, index]));
+  const undone = state.categories
+    .flatMap((category) =>
+      category.items
+        .filter((entry) => !entry.done)
+        .map((entry, itemIndex) => ({ category, entry, itemIndex })),
+    )
+    .sort((left, right) => {
+      const importantDifference = Number(right.entry.important) - Number(left.entry.important);
+      if (importantDifference) return importantDifference;
+      const categoryDifference =
+        (categoryOrder.get(left.category.id) ?? 99) - (categoryOrder.get(right.category.id) ?? 99);
+      return categoryDifference || left.itemIndex - right.itemIndex;
+    });
+
+  elements.focusPhase.textContent = phases.phase;
+  elements.focusTitle.textContent = undone.length ? phases.title : "当前清单已经完成";
+  elements.focusDescription.textContent = undone.length
+    ? phases.description
+    : "可以导出一份备份，或继续添加个人需要的事项。";
+  elements.focusItems.innerHTML = "";
+
+  undone.slice(0, 3).forEach(({ category, entry }) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "focus-item";
+    button.dataset.focusItemId = entry.id;
+    button.title = `${category.name}：${entry.text}`;
+    button.textContent = entry.text;
+    elements.focusItems.appendChild(button);
+  });
+
+  elements.focusActionButton.textContent = undone.some(({ entry }) => entry.important)
+    ? days === null
+      ? "设置出发日期"
+      : "查看关键待办"
+    : undone.length
+      ? days === null
+        ? "设置出发日期"
+        : "查看全部待办"
+      : "导出备份";
+}
+
 function renderCategories() {
   elements.categoryGrid.innerHTML = "";
   const query = state.settings.search.toLocaleLowerCase("zh-CN");
@@ -370,6 +694,14 @@ function renderCategories() {
       ? `共 ${state.categories.length} 个分类 · ${totalItems} 项`
       : `找到 ${visibleItemCount} 项 · ${visibleCategoryCount} 个分类`;
   elements.emptyState.hidden = visibleCategoryCount > 0;
+  if (!visibleCategoryCount) {
+    const hasCategories = state.categories.length > 0;
+    elements.emptyStateTitle.textContent = hasCategories ? "没有找到对应事项" : "清单还是空的";
+    elements.emptyStateText.textContent = hasCategories
+      ? "换个关键词，或清除当前筛选条件。"
+      : "先创建一个大类，再加入你的第一项准备。";
+    elements.clearFiltersButton.textContent = hasCategories ? "清除筛选" : "添加大类";
+  }
 }
 
 function matchesFilters(entry, query) {
@@ -380,13 +712,20 @@ function matchesFilters(entry, query) {
 function matchesStatusFilter(entry) {
   if (state.settings.filter === "todo") return !entry.done;
   if (state.settings.filter === "done") return entry.done;
-  if (state.settings.filter === "important") return entry.important;
+  if (state.settings.filter === "important") return entry.important && !entry.done;
   return true;
 }
 
 function renderSuggestions() {
   const used = new Set(state.settings.usedSuggestions);
-  const available = optionalSuggestions.filter((entry) => !used.has(entry.id));
+  const existingSources = new Set(
+    state.categories.flatMap((category) =>
+      category.items.map((entry) => entry.sourceSuggestionId).filter(Boolean),
+    ),
+  );
+  const available = optionalSuggestions.filter(
+    (entry) => !used.has(entry.id) && !existingSources.has(entry.id),
+  );
   elements.suggestionList.innerHTML = "";
 
   available.forEach((entry) => {
@@ -437,9 +776,15 @@ function buildCategoryPanel(category, categoryIndex, shownItems) {
       <button class="category-icon-button edit-only" data-action="edit-category" aria-label="编辑分类" title="编辑分类"><i data-lucide="pencil" aria-hidden="true"></i></button>
       <button class="category-icon-button edit-only" data-action="delete-category" aria-label="删除分类" title="删除分类"><i data-lucide="trash-2" aria-hidden="true"></i></button>
       <button class="category-icon-button category-menu-button" data-action="open-category-menu" aria-label="管理大类" title="管理大类"><i data-lucide="ellipsis-vertical" aria-hidden="true"></i></button>
-      <button class="category-icon-button" data-action="toggle-category" aria-label="${category.collapsed ? "展开" : "折叠"}分类" title="${category.collapsed ? "展开" : "折叠"}分类"><i data-lucide="${category.collapsed ? "chevron-down" : "chevron-up"}" aria-hidden="true"></i></button>
+      <button class="category-icon-button" data-action="toggle-category" aria-label="切换大类" aria-expanded="${!category.collapsed}" title="${category.collapsed ? "展开" : "折叠"}分类"><i data-lucide="${category.collapsed ? "chevron-down" : "chevron-up"}" aria-hidden="true"></i></button>
     </div>`;
   header.querySelector(".category-title").textContent = category.name;
+  header
+    .querySelector('[data-action="open-category-menu"]')
+    .setAttribute("aria-label", `管理大类“${category.name}”`);
+  header
+    .querySelector('[data-action="toggle-category"]')
+    .setAttribute("aria-label", `${category.collapsed ? "展开" : "折叠"}大类“${category.name}”`);
   panel.appendChild(header);
 
   if (!category.collapsed) {
@@ -475,7 +820,10 @@ function buildChecklistItem(category, entry) {
   checkbox.type = "checkbox";
   checkbox.checked = entry.done;
   checkbox.setAttribute("aria-label", `标记“${entry.text}”为${entry.done ? "未完成" : "已完成"}`);
-  row.appendChild(checkbox);
+  const checkboxHitArea = document.createElement("label");
+  checkboxHitArea.className = "item-checkbox-hit";
+  checkboxHitArea.appendChild(checkbox);
+  row.appendChild(checkboxHitArea);
 
   const content = document.createElement("div");
   content.className = "item-content";
@@ -578,8 +926,12 @@ function moveArrayItem(array, fromIndex, toIndex) {
 
 function toggleEditMode(force) {
   state.settings.editMode = typeof force === "boolean" ? force : !state.settings.editMode;
-  saveState();
+  saveState(undefined, { skipRecoveryUpdate: true, preserveUndo: true });
   render();
+}
+
+function totalItemCount() {
+  return state.categories.reduce((sum, category) => sum + category.items.length, 0);
 }
 
 function openManageDialog() {
@@ -590,30 +942,70 @@ function openManageDialog() {
 function deleteCategory(category) {
   const description = category.items.length ? `，其中包含 ${category.items.length} 个事项` : "";
   if (!window.confirm(`删除大类“${category.name}”${description}？`)) return false;
-  state.categories = state.categories.filter((entry) => entry.id !== category.id);
-  saveState("大类已删除");
+  const previousState = cloneState();
+  if (!writeRecoverySnapshot(previousState, `删除大类“${category.name}”前的清单`)) {
+    showToast("未能创建恢复点，删除已取消，请先导出备份");
+    return false;
+  }
+  const categoryIndex = state.categories.findIndex((entry) => entry.id === category.id);
+  if (categoryIndex < 0) return false;
+  state.categories.splice(categoryIndex, 1);
+  saveState(undefined, { skipRecoveryUpdate: true, preserveUndo: true });
   render();
+  queueUndo(previousState, `删除大类“${category.name}”`, "大类已删除");
   return true;
 }
 
 function deleteItem(category, entry) {
-  if (!entry || !window.confirm(`删除事项“${entry.text}”？`)) return false;
-  category.items = category.items.filter((candidate) => candidate.id !== entry.id);
-  saveState("事项已删除");
+  if (!entry) return false;
+  const previousState = cloneState();
+  if (!writeRecoverySnapshot(previousState, `删除“${entry.text}”前的清单`)) {
+    showToast("未能创建恢复点，删除已取消，请先导出备份");
+    return false;
+  }
+  const itemIndex = category.items.findIndex((candidate) => candidate.id === entry.id);
+  const [deleted] = category.items.splice(itemIndex, 1);
+  const suggestionId = suggestionIdForItem(deleted);
+  if (suggestionId) {
+    state.settings.usedSuggestions = state.settings.usedSuggestions.filter((id) => id !== suggestionId);
+  }
+  saveState(undefined, { skipRecoveryUpdate: true, preserveUndo: true });
   render();
+  queueUndo(previousState, `删除“${entry.text}”`, `已删除“${entry.text}”`);
   return true;
 }
 
-function closeContextMenu() {
+function suggestionIdForItem(entry) {
+  if (optionalSuggestionIds.has(entry?.sourceSuggestionId)) return entry.sourceSuggestionId;
+  return optionalSuggestions.find(
+    (suggestionEntry) =>
+      suggestionEntry.text === entry?.text && suggestionEntry.note === entry?.note,
+  )?.id;
+}
+
+function closeContextMenu(restoreFocus = false) {
   elements.contextMenu.hidden = true;
   elements.contextMenu.innerHTML = "";
   contextTarget = null;
+  if (restoreFocus && contextReturnFocus?.isConnected) {
+    contextReturnFocus.focus({ preventScroll: true });
+  }
+  contextReturnFocus = null;
 }
 
 function contextActionsFor(target) {
   if (target.type === "item") {
+    const category = findCategory(target.categoryId);
+    const itemIndex = category?.items.findIndex((entry) => entry.id === target.itemId) ?? -1;
     return [
-      { action: "edit-item", icon: "pencil", label: "编辑事项" },
+      { action: "edit-item", icon: "pencil", label: "编辑或移动" },
+      { action: "move-item-up", icon: "arrow-up", label: "上移事项", disabled: itemIndex <= 0 },
+      {
+        action: "move-item-down",
+        icon: "arrow-down",
+        label: "下移事项",
+        disabled: !category || itemIndex < 0 || itemIndex >= category.items.length - 1,
+      },
       { action: "delete-item", icon: "trash-2", label: "删除事项", danger: true },
     ];
   }
@@ -628,12 +1020,15 @@ function openContextMenu(target, options = {}) {
   closeMoreMenu();
   closeContextMenu();
   contextTarget = target;
+  contextReturnFocus = options.anchor ?? document.activeElement;
 
   contextActionsFor(target).forEach((entry) => {
     const button = document.createElement("button");
     button.type = "button";
     button.role = "menuitem";
+    button.tabIndex = -1;
     button.dataset.contextAction = entry.action;
+    button.disabled = Boolean(entry.disabled);
     if (entry.danger) button.classList.add("context-menu__danger");
     button.innerHTML = `<i data-lucide="${entry.icon}" aria-hidden="true"></i><span>${entry.label}</span>`;
     elements.contextMenu.appendChild(button);
@@ -650,7 +1045,37 @@ function openContextMenu(target, options = {}) {
   const top = Math.min(Math.max(10, preferredY), window.innerHeight - menuRect.height - 10);
   elements.contextMenu.style.left = `${left}px`;
   elements.contextMenu.style.top = `${top}px`;
-  elements.contextMenu.querySelector("button")?.focus({ preventScroll: true });
+  const firstEnabledButton = elements.contextMenu.querySelector("button:not(:disabled)");
+  if (firstEnabledButton) {
+    firstEnabledButton.tabIndex = 0;
+    firstEnabledButton.focus({ preventScroll: true });
+  }
+}
+
+function sameContextTarget(left, right) {
+  return Boolean(
+    left &&
+      right &&
+      left.type === right.type &&
+      left.categoryId === right.categoryId &&
+      left.itemId === right.itemId,
+  );
+}
+
+function focusItemMenu(itemId) {
+  requestAnimationFrame(() => {
+    elements.categoryGrid
+      .querySelector(`.checklist-item[data-item-id="${CSS.escape(itemId)}"] .item-menu-button`)
+      ?.focus({ preventScroll: true });
+  });
+}
+
+function focusCategoryMenu(categoryId) {
+  requestAnimationFrame(() => {
+    elements.categoryGrid
+      .querySelector(`.category-panel[data-category-id="${CSS.escape(categoryId)}"] .category-menu-button`)
+      ?.focus({ preventScroll: true });
+  });
 }
 
 function contextTargetFromElement(element) {
@@ -664,11 +1089,106 @@ function contextTargetFromElement(element) {
   };
 }
 
-function showToast(message) {
+function showToast(message, options = {}) {
   clearTimeout(toastTimer);
-  elements.toast.textContent = message;
+  toastActionCallback = options.onAction ?? null;
+  elements.toastMessage.textContent = message;
+  elements.toastAction.hidden = !toastActionCallback;
+  elements.toastAction.textContent = options.actionLabel ?? "";
   elements.toast.classList.add("is-visible");
-  toastTimer = setTimeout(() => elements.toast.classList.remove("is-visible"), 2200);
+  toastTimer = setTimeout(() => {
+    elements.toast.classList.remove("is-visible");
+    toastActionCallback = null;
+    elements.toastAction.hidden = true;
+  }, options.duration ?? 2200);
+}
+
+function updateRecoveryActions() {
+  const recovery = readRecoverySnapshot();
+  const savedTime = recovery ? formatRecoveryTime(recovery.metadata.savedAt) : "";
+  elements.restoreBackupButton.disabled = !recovery;
+  elements.restoreBackupButton.title = recovery
+    ? `${recovery.metadata.label}${savedTime ? `（${savedTime}）` : ""}：${recovery.metadata.categoryCount} 个大类、${recovery.metadata.itemCount} 个事项`
+    : "暂无可恢复的本地版本";
+  elements.undoButton.hidden = undoStack.length === 0;
+  elements.undoButton.querySelector("span").textContent =
+    undoStack.length > 1 ? `撤销最近操作（${undoStack.length}）` : "撤销最近操作";
+}
+
+function formatRecoveryTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function showUndoToast(message) {
+  const count = undoStack.length;
+  showToast(message, {
+    actionLabel: count > 1 ? `撤销（${count}）` : "撤销",
+    duration: 8000,
+    onAction: undoLatestAction,
+  });
+}
+
+function queueUndo(snapshot, label, message) {
+  undoStack.push({ snapshot: cloneState(snapshot), label });
+  if (undoStack.length > MAX_UNDO_ACTIONS) undoStack.shift();
+  updateRecoveryActions();
+  showUndoToast(message);
+}
+
+function undoLatestAction() {
+  const action = undoStack.pop();
+  if (!action) return;
+  const currentState = cloneState();
+  state = cloneState(action.snapshot);
+  if (!saveState(undefined, { skipRecoveryUpdate: true, preserveUndo: true })) {
+    state = currentState;
+    undoStack.push(action);
+    render();
+    return;
+  }
+  render();
+  updateRecoveryActions();
+  if (undoStack.length) {
+    showUndoToast(`已撤销“${action.label}”，还可继续撤销`);
+  } else {
+    showToast(`已撤销“${action.label}”`);
+  }
+}
+
+function restoreRecoverySnapshot() {
+  const recovery = readRecoverySnapshot();
+  if (!recovery) {
+    showToast("暂无可恢复的本地版本");
+    return;
+  }
+  const summary = `${recovery.metadata.categoryCount} 个大类、${recovery.metadata.itemCount} 个事项`;
+  const savedTime = formatRecoveryTime(recovery.metadata.savedAt);
+  const source = `${recovery.metadata.label}${savedTime ? `，保存于 ${savedTime}` : ""}`;
+  if (!window.confirm(`恢复“${source}”（${summary}）？当前清单会保留为新的恢复点。`)) return;
+
+  const currentState = cloneState();
+  const previousRecovery = captureRecoveryStorage();
+  if (!writeRecoverySnapshot(currentState, "恢复前的清单")) {
+    showToast("未能创建恢复点，操作已取消，请先导出备份");
+    return;
+  }
+  state = cloneState(recovery.snapshot);
+  if (!saveState(undefined, { skipRecoveryUpdate: true })) {
+    state = currentState;
+    restoreRecoveryStorage(previousRecovery);
+    render();
+    return;
+  }
+  render();
+  queueUndo(currentState, "恢复本地版本", "已恢复上一份本地版本");
 }
 
 function closeMoreMenu() {
@@ -691,11 +1211,29 @@ function exportBackup() {
 
 async function importBackup(file) {
   try {
+    if (file.size > MAX_IMPORT_BYTES) throw new Error("Backup file is too large");
     const parsed = JSON.parse(await file.text());
-    state = normalizeState(parsed);
-    saveState();
+    const nextState = normalizeState(parsed, { strictLimits: true });
+    const categoryCount = nextState.categories.length;
+    const itemCount = nextState.categories.reduce((sum, category) => sum + category.items.length, 0);
+    if (!window.confirm(`导入将替换当前清单。该备份包含 ${categoryCount} 个大类、${itemCount} 个事项，继续吗？`)) {
+      return;
+    }
+    const previousState = cloneState();
+    const previousRecovery = captureRecoveryStorage();
+    if (!writeRecoverySnapshot(previousState, "导入前的清单")) {
+      showToast("未能创建恢复点，导入已取消，请先导出备份");
+      return;
+    }
+    state = nextState;
+    if (!saveState(undefined, { skipRecoveryUpdate: true })) {
+      state = previousState;
+      restoreRecoveryStorage(previousRecovery);
+      render();
+      return;
+    }
     render();
-    showToast("备份已恢复");
+    queueUndo(previousState, "导入备份", "备份已恢复");
   } catch (error) {
     console.warn("Could not import backup", error);
     showToast("无法读取该备份文件");
@@ -766,6 +1304,7 @@ async function shareToAppleNotes() {
   if (navigator.share && (!navigator.canShare || navigator.canShare(shareData))) {
     try {
       await navigator.share(shareData);
+      showToast("清单已通过系统分享");
       return;
     } catch (error) {
       if (error?.name === "AbortError") return;
@@ -802,13 +1341,31 @@ elements.suggestionList.addEventListener("click", (event) => {
     return;
   }
 
-  category.items.push(item(makeId("item"), entry.text, entry.note));
+  if (category.items.length >= MAX_ITEMS_PER_CATEGORY || totalItemCount() >= MAX_TOTAL_ITEMS) {
+    showToast("清单事项已达到上限");
+    return;
+  }
+
+  category.items.push(item(makeId("item"), entry.text, entry.note, false, entry.id));
   state.settings.usedSuggestions.push(entry.id);
   saveState(`已加入“${entry.text}”`);
   render();
 });
 
 elements.categoryGrid.addEventListener("click", (event) => {
+  const clickedTarget = contextTargetFromElement(event.target);
+  if (
+    suppressedClickTarget &&
+    performance.now() <= suppressClickUntil &&
+    sameContextTarget(clickedTarget, suppressedClickTarget)
+  ) {
+    suppressedClickTarget = null;
+    suppressClickUntil = 0;
+    clearTimeout(suppressClickTimer);
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
   const button = event.target.closest("button[data-action]");
   if (!button) return;
   const panel = button.closest(".category-panel");
@@ -819,12 +1376,19 @@ elements.categoryGrid.addEventListener("click", (event) => {
   const itemId = row?.dataset.itemId;
   const itemIndex = category.items.findIndex((entry) => entry.id === itemId);
 
-  if (action === "toggle-category") category.collapsed = !category.collapsed;
+  if (action === "toggle-category") {
+    category.collapsed = !category.collapsed;
+    saveState(undefined, { skipRecoveryUpdate: true, preserveUndo: true });
+    render();
+    return;
+  }
   if (action === "add-item") return openItemDialog(category.id);
   if (action === "open-category-menu") {
+    event.stopPropagation();
     return openContextMenu({ type: "category", categoryId: category.id }, { anchor: button });
   }
   if (action === "open-item-menu") {
+    event.stopPropagation();
     return openContextMenu({ type: "item", categoryId: category.id, itemId }, { anchor: button });
   }
   if (action === "edit-category") return openCategoryDialog(category);
@@ -857,14 +1421,15 @@ elements.categoryGrid.addEventListener("contextmenu", (event) => {
 });
 
 elements.categoryGrid.addEventListener("pointerdown", (event) => {
-  if (event.pointerType === "mouse" || event.target.closest("button, input, a")) return;
+  if (event.pointerType === "mouse" || event.target.closest("button, input, label, a")) return;
   const target = contextTargetFromElement(event.target);
   if (!target) return;
   longPressStart = { x: event.clientX, y: event.clientY, target };
   clearTimeout(longPressTimer);
   longPressTimer = setTimeout(() => {
     if (!longPressStart) return;
-    openContextMenu(longPressStart.target, { x: longPressStart.x, y: longPressStart.y });
+    longPressActivatedTarget = longPressStart.target;
+    openContextMenu(longPressActivatedTarget, { x: longPressStart.x, y: longPressStart.y });
     longPressStart = null;
   }, 550);
 });
@@ -881,8 +1446,12 @@ for (const eventName of ["pointerup", "pointercancel", "pointerleave"]) {
   elements.categoryGrid.addEventListener(eventName, () => {
     clearTimeout(longPressTimer);
     longPressStart = null;
+    if (eventName === "pointerup") armLongPressClickSuppression();
+    if (eventName === "pointercancel") longPressActivatedTarget = null;
   });
 }
+
+elements.categoryGrid.addEventListener("touchend", armLongPressClickSuppression, { passive: true });
 
 elements.contextMenu.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-context-action]");
@@ -890,14 +1459,68 @@ elements.contextMenu.addEventListener("click", (event) => {
   const target = { ...contextTarget };
   const category = findCategory(target.categoryId);
   const entry = target.itemId ? findItem(target.itemId)?.entry : null;
+  const action = button.dataset.contextAction;
+  const itemIndex = entry ? category?.items.findIndex((candidate) => candidate.id === entry.id) ?? -1 : -1;
+  const nextItemId = entry
+    ? category?.items[itemIndex + 1]?.id ?? category?.items[itemIndex - 1]?.id ?? null
+    : null;
+  const categoryIndex = state.categories.findIndex((candidate) => candidate.id === category?.id);
+  const nextCategoryId =
+    state.categories[categoryIndex + 1]?.id ?? state.categories[categoryIndex - 1]?.id ?? null;
   closeContextMenu();
   if (!category) return;
 
-  if (button.dataset.contextAction === "add-item") openItemDialog(category.id);
-  if (button.dataset.contextAction === "edit-category") openCategoryDialog(category);
-  if (button.dataset.contextAction === "delete-category") deleteCategory(category);
-  if (button.dataset.contextAction === "edit-item" && entry) openItemDialog(category.id, entry);
-  if (button.dataset.contextAction === "delete-item" && entry) deleteItem(category, entry);
+  if (action === "add-item") openItemDialog(category.id);
+  if (action === "edit-category") openCategoryDialog(category);
+  if (action === "delete-category") {
+    const deleted = deleteCategory(category);
+    if (deleted && nextCategoryId) focusCategoryMenu(nextCategoryId);
+    if (!deleted) focusCategoryMenu(category.id);
+  }
+  if (action === "edit-item" && entry) openItemDialog(category.id, entry);
+  if (action === "delete-item" && entry) {
+    const deleted = deleteItem(category, entry);
+    if (deleted && nextItemId) focusItemMenu(nextItemId);
+    else if (deleted) focusCategoryMenu(category.id);
+    else focusItemMenu(entry.id);
+  }
+  if (["move-item-up", "move-item-down"].includes(action) && entry) {
+    const index = category.items.findIndex((candidate) => candidate.id === entry.id);
+    moveArrayItem(
+      category.items,
+      index,
+      index + (action === "move-item-up" ? -1 : 1),
+    );
+    saveState("事项顺序已调整");
+    render();
+    focusItemMenu(entry.id);
+  }
+});
+
+elements.contextMenu.addEventListener("keydown", (event) => {
+  const buttons = [...elements.contextMenu.querySelectorAll("button:not(:disabled)")];
+  if (!buttons.length) return;
+  const currentIndex = buttons.indexOf(document.activeElement);
+  if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) event.preventDefault();
+  let nextButton = null;
+  if (event.key === "ArrowDown") nextButton = buttons[(currentIndex + 1 + buttons.length) % buttons.length];
+  if (event.key === "ArrowUp") nextButton = buttons[(currentIndex - 1 + buttons.length) % buttons.length];
+  if (event.key === "Home") nextButton = buttons[0];
+  if (event.key === "End") nextButton = buttons.at(-1);
+  if (nextButton) {
+    buttons.forEach((entry) => {
+      entry.tabIndex = entry === nextButton ? 0 : -1;
+    });
+    nextButton.focus();
+  }
+  if (event.key === "Tab") {
+    event.preventDefault();
+    closeContextMenu(true);
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeContextMenu(true);
+  }
 });
 
 elements.categoryGrid.addEventListener("dragstart", (event) => {
@@ -927,10 +1550,15 @@ elements.categoryGrid.addEventListener("drop", (event) => {
   const source = findItem(itemId);
   const targetCategory = findCategory(targetPanel.dataset.categoryId);
   if (!source || !targetCategory) return;
+  if (source.category.id !== targetCategory.id && targetCategory.items.length >= MAX_ITEMS_PER_CATEGORY) {
+    showToast(`目标大类已达到 ${MAX_ITEMS_PER_CATEGORY} 项上限`);
+    return;
+  }
 
+  const targetRow = event.target.closest(".checklist-item");
+  if (targetRow?.dataset.itemId === itemId) return;
   const sourceIndex = source.category.items.findIndex((entry) => entry.id === itemId);
   const [moved] = source.category.items.splice(sourceIndex, 1);
-  const targetRow = event.target.closest(".checklist-item");
   const targetIndex = targetRow
     ? Math.max(0, targetCategory.items.findIndex((entry) => entry.id === targetRow.dataset.itemId))
     : targetCategory.items.length;
@@ -949,6 +1577,10 @@ elements.itemForm.addEventListener("submit", (event) => {
   if (editingId) {
     const found = findItem(editingId);
     if (!found) return;
+    if (found.category.id !== targetCategory.id && targetCategory.items.length >= MAX_ITEMS_PER_CATEGORY) {
+      showToast(`目标大类已达到 ${MAX_ITEMS_PER_CATEGORY} 项上限`);
+      return;
+    }
     found.entry.text = text;
     found.entry.note = elements.itemNote.value.trim();
     found.entry.important = elements.itemImportant.checked;
@@ -958,12 +1590,17 @@ elements.itemForm.addEventListener("submit", (event) => {
     }
     showToast("事项已更新");
   } else {
+    if (targetCategory.items.length >= MAX_ITEMS_PER_CATEGORY || totalItemCount() >= MAX_TOTAL_ITEMS) {
+      showToast("清单事项已达到上限");
+      return;
+    }
     targetCategory.items.push({
       id: makeId("item"),
       text,
       note: elements.itemNote.value.trim(),
       important: elements.itemImportant.checked,
       done: false,
+      sourceSuggestionId: "",
     });
     showToast("事项已添加");
   }
@@ -987,6 +1624,10 @@ elements.categoryForm.addEventListener("submit", (event) => {
     category.color = elements.categoryColor.value;
     showToast("分类已更新");
   } else {
+    if (state.categories.length >= MAX_CATEGORIES) {
+      showToast("大类数量已达到上限");
+      return;
+    }
     state.categories.push({
       id: makeId("category"),
       name,
@@ -1007,18 +1648,39 @@ elements.departureDate.addEventListener("change", () => {
   state.settings.departureDate = elements.departureDate.value;
   saveState("出发日期已保存");
   renderCountdown();
+  renderFocusPanel();
+  refreshIcons();
 });
 
 elements.personalNotes.addEventListener("input", () => {
+  invalidateUndoStack();
   state.settings.notes = elements.personalNotes.value;
-  elements.autosaveStatus.textContent = "正在保存…";
+  elements.autosaveStatus.classList.remove("is-error");
+  elements.autosaveText.textContent = "正在保存…";
   clearTimeout(elements.personalNotes.saveTimer);
-  elements.personalNotes.saveTimer = setTimeout(() => saveState(), 350);
+  elements.personalNotes.saveTimer = setTimeout(() => {
+    elements.personalNotes.saveTimer = null;
+    saveState();
+  }, 350);
+});
+
+function flushPendingNotes() {
+  if (!elements.personalNotes.saveTimer) return;
+  clearTimeout(elements.personalNotes.saveTimer);
+  elements.personalNotes.saveTimer = null;
+  state.settings.notes = elements.personalNotes.value;
+  saveState();
+}
+
+elements.personalNotes.addEventListener("blur", flushPendingNotes);
+window.addEventListener("pagehide", flushPendingNotes);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushPendingNotes();
 });
 
 elements.searchInput.addEventListener("input", () => {
   state.settings.search = elements.searchInput.value;
-  saveState();
+  saveState(undefined, { skipRecoveryUpdate: true, preserveUndo: true });
   renderCategories();
   refreshIcons();
 });
@@ -1027,29 +1689,86 @@ elements.filterControl.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-filter]");
   if (!button) return;
   state.settings.filter = button.dataset.filter;
-  saveState();
+  saveState(undefined, { skipRecoveryUpdate: true, preserveUndo: true });
   render();
 });
 
 document.querySelector("#manageChecklistButton").addEventListener("click", openManageDialog);
-document.querySelector("#heroManageChecklist").addEventListener("click", openManageDialog);
+document.querySelector("#heroContinueButton").addEventListener("click", () => {
+  elements.focusPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+});
 document.querySelector("#exitEditMode").addEventListener("click", () => toggleEditMode(false));
-document.querySelector("#clearFiltersButton").addEventListener("click", () => {
+elements.clearFiltersButton.addEventListener("click", () => {
+  if (!state.categories.length) {
+    openCategoryDialog();
+    return;
+  }
   state.settings.filter = "all";
   state.settings.search = "";
-  saveState();
+  saveState(undefined, { skipRecoveryUpdate: true, preserveUndo: true });
   render();
+});
+
+elements.mobileOverviewToggle.addEventListener("click", () => {
+  const expanded = !elements.sidebar.classList.contains("is-expanded");
+  elements.sidebar.classList.toggle("is-expanded", expanded);
+  elements.mobileOverviewToggle.setAttribute("aria-expanded", String(expanded));
+});
+
+elements.focusItems.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-focus-item-id]");
+  if (!button) return;
+  const found = findItem(button.dataset.focusItemId);
+  if (!found) return;
+  state.settings.filter = "all";
+  state.settings.search = "";
+  found.category.collapsed = false;
+  saveState(undefined, { skipRecoveryUpdate: true, preserveUndo: true });
+  render();
+  requestAnimationFrame(() => {
+    const row = elements.categoryGrid.querySelector(`[data-item-id="${CSS.escape(found.entry.id)}"]`);
+    if (!row) return;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.classList.add("is-highlighted");
+    setTimeout(() => row.classList.remove("is-highlighted"), 1800);
+  });
+});
+
+elements.focusActionButton.addEventListener("click", () => {
+  if (!state.settings.departureDate) {
+    elements.sidebar.classList.add("is-expanded");
+    elements.mobileOverviewToggle.setAttribute("aria-expanded", "true");
+    elements.departureDate.scrollIntoView({ behavior: "smooth", block: "center" });
+    requestAnimationFrame(() => elements.departureDate.focus({ preventScroll: true }));
+    return;
+  }
+  const undone = state.categories.flatMap((category) => category.items).filter((entry) => !entry.done);
+  if (!undone.length) {
+    exportBackup();
+    return;
+  }
+  state.settings.filter = undone.some((entry) => entry.important) ? "important" : "todo";
+  state.settings.search = "";
+  saveState(undefined, { skipRecoveryUpdate: true, preserveUndo: true });
+  render();
+  elements.categoryGrid.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
 elements.densityButton.addEventListener("click", () => {
   state.settings.density = state.settings.density === "compact" ? "comfortable" : "compact";
-  saveState(state.settings.density === "compact" ? "已切换为紧凑视图" : "已切换为舒适视图");
+  saveState(state.settings.density === "compact" ? "已切换为紧凑视图" : "已切换为舒适视图", {
+    skipRecoveryUpdate: true,
+    preserveUndo: true,
+  });
   render();
 });
 
 elements.layoutButton.addEventListener("click", () => {
   state.settings.layout = state.settings.layout === "single" ? "double" : "single";
-  saveState(state.settings.layout === "single" ? "已切换为单列" : "已切换为双列");
+  saveState(state.settings.layout === "single" ? "已切换为单列" : "已切换为双列", {
+    skipRecoveryUpdate: true,
+    preserveUndo: true,
+  });
   render();
 });
 
@@ -1089,9 +1808,18 @@ document.querySelector("#exportButton").addEventListener("click", () => {
   closeMoreMenu();
   exportBackup();
 });
+document.querySelector("#sidebarExportButton").addEventListener("click", exportBackup);
 document.querySelector("#importButton").addEventListener("click", () => {
   closeMoreMenu();
   elements.importFileInput.click();
+});
+elements.restoreBackupButton.addEventListener("click", () => {
+  closeMoreMenu();
+  restoreRecoverySnapshot();
+});
+elements.undoButton.addEventListener("click", () => {
+  closeMoreMenu();
+  undoLatestAction();
 });
 document.querySelector("#printButton").addEventListener("click", () => {
   closeMoreMenu();
@@ -1100,10 +1828,21 @@ document.querySelector("#printButton").addEventListener("click", () => {
 document.querySelector("#resetButton").addEventListener("click", () => {
   closeMoreMenu();
   if (!window.confirm("恢复默认清单？当前修改和勾选进度会被清除。")) return;
+  const previousState = cloneState();
+  const previousRecovery = captureRecoveryStorage();
+  if (!writeRecoverySnapshot(previousState, "恢复默认前的清单")) {
+    showToast("未能创建恢复点，操作已取消，请先导出备份");
+    return;
+  }
   state = cloneDefaults();
-  saveState();
+  if (!saveState(undefined, { skipRecoveryUpdate: true })) {
+    state = previousState;
+    restoreRecoveryStorage(previousRecovery);
+    render();
+    return;
+  }
   render();
-  showToast("已恢复默认清单");
+  queueUndo(previousState, "恢复默认清单", "已恢复默认清单");
 });
 
 elements.importFileInput.addEventListener("change", () => {
@@ -1144,7 +1883,17 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     openItemDialog();
   }
-  if (event.key === "Escape") closeContextMenu();
+  if (event.key === "Escape") closeContextMenu(true);
 });
 
 render();
+if (loadNotice) showToast(loadNotice, { duration: 5200 });
+
+elements.toastAction.addEventListener("click", () => {
+  const callback = toastActionCallback;
+  clearTimeout(toastTimer);
+  elements.toast.classList.remove("is-visible");
+  elements.toastAction.hidden = true;
+  toastActionCallback = null;
+  callback?.();
+});
