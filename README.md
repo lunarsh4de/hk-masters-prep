@@ -1,6 +1,7 @@
 # 港硕行前备忘录
 
 面向内地赴港读硕学生的行前行动清单，覆盖出发前准备与抵港第一周。无需注册和后端，可直接部署到 GitHub Pages，个人内容只保存在使用者的浏览器中。
+https://lunarsh4de.github.io/hk-masters-prep/
 
 ## 功能
 
@@ -28,14 +29,6 @@ python3 -m http.server 4173
 ```
 
 然后访问 `http://localhost:4173`。
-
-## 部署到 GitHub Pages
-
-推送到 GitHub 后：
-
-1. 在仓库的 `Settings > Pages` 中，将 `Source` 设为 `Deploy from a branch`。
-2. 选择 `main` 分支和根目录 `/ (root)`，然后保存。
-3. 等待部署完成后，访问 Pages 页面显示的网址。
 
 ## 数据说明
 
